@@ -80,6 +80,7 @@ class BaseTransformer(pl.LightningModule):
         self.output_dir = Path(self.hparams.output_dir)
         cache_dir = self.hparams.cache_dir if self.hparams.cache_dir else None
 
+        # retrieve model config
         if config is None:
             self.config = AutoConfig.from_pretrained(
                 self.hparams.config_name if self.hparams.config_name else self.hparams.model_name_or_path,
@@ -96,6 +97,7 @@ class BaseTransformer(pl.LightningModule):
                 assert hasattr(self.config, p), f"model config doesn't have a `{p}` attribute"
                 setattr(self.config, p, getattr(self.hparams, p))
 
+        # retrieve model tokenizer
         if tokenizer is None:
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.hparams.tokenizer_name if self.hparams.tokenizer_name else self.hparams.model_name_or_path,
@@ -104,6 +106,7 @@ class BaseTransformer(pl.LightningModule):
         else:
             self.tokenizer: PreTrainedTokenizer = tokenizer
 
+        # retrieve model
         self.model_type = MODEL_MODES[mode]
         if model is None:
             self.model = self.model_type.from_pretrained(
@@ -168,11 +171,12 @@ class BaseTransformer(pl.LightningModule):
         num_devices = max(1, self.hparams.gpus)  # TODO: consider num_tpu_cores
         effective_batch_size = self.hparams.train_batch_size * self.hparams.accumulate_grad_batches * num_devices
         dataset_size = len(self.train_loader.dataset)
-        return (dataset_size / effective_batch_size) * self.hparams.max_epochs
+        return int((dataset_size / effective_batch_size) * self.hparams.max_epochs)
 
     def setup(self, stage):
+        self.prepare_data()
+        self.train_loader = self.get_dataloader("train", self.hparams.train_batch_size, shuffle=True)
         if stage == "fit":
-            self.train_loader = self.get_dataloader("train", self.hparams.train_batch_size, shuffle=True)
             self.val_loader = self.get_dataloader("dev", self.hparams.eval_batch_size, shuffle=False)
         elif stage == "test":
             self.test_loader = self.get_dataloader("test", self.hparams.eval_batch_size, shuffle=False)
@@ -188,13 +192,12 @@ class BaseTransformer(pl.LightningModule):
 
     def test_dataloader(self):
         return self.test_loader
-        # return self.get_dataloader("test", self.hparams.eval_batch_size, shuffle=False)
 
-    def _feature_file(self, mode):
+    def _feature_file(self, type_path):
         return os.path.join(
             self.hparams.data_dir,
             "cached_{}_{}_{}".format(
-                mode,
+                type_path,
                 list(filter(None, self.hparams.model_name_or_path.split("/"))).pop(),
                 self.hparams.filler_case
             ),
@@ -314,7 +317,7 @@ class BaseTransformer(pl.LightningModule):
 
 
 class LoggingCallback(pl.Callback):
-    def on_batch_end(self, trainer, pl_module):
+    def on_batch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         lr_scheduler = trainer.lr_schedulers[0]["scheduler"]
         lrs = {f"lr_group_{i}": lr for i, lr in enumerate(lr_scheduler.get_lr())}
         pl_module.logger.log_metrics(lrs)
@@ -355,25 +358,25 @@ def add_generic_args(parser, root_dir) -> None:
         # required=True,
         help="The output directory where the model predictions and checkpoints will be written.",
     )
-    parser.add_argument(
-        "--precision",
-        default=32,
-        type=int,
-        help="Whether to use 16-bit (mixed) precision (through NVIDIA apex) instead of 32-bit",
-    )
-    parser.add_argument(
-        "--amp_backend",
-        default='apex',
-        type=str,
-        help="The PyTorch AMP `native` or NVIDIA `apex`.",
-    )
-    parser.add_argument(
-        "--amp_level",
-        type=str,
-        default="O2",
-        help="Apex AMP optimization level selected in ['O0', 'O1', 'O2', and 'O3']."
-        "See details at https://nvidia.github.io/apex/amp.html",
-    )
+    # parser.add_argument(
+    #     "--precision",
+    #     default=16,
+    #     type=int,
+    #     help="Whether to use 16-bit (mixed) precision (through NVIDIA apex) instead of 32-bit",
+    # )
+    # parser.add_argument(
+    #     "--amp_backend",
+    #     default="apex",
+    #     type=str,
+    #     help="The PyTorch AMP `native` or NVIDIA `apex`.",
+    # )
+    # parser.add_argument(
+    #     "--amp_level",
+    #     type=str,
+    #     default="O2",
+    #     help="Apex AMP optimization level selected in ['O0', 'O1', 'O2', and 'O3']."
+    #     "See details at https://nvidia.github.io/apex/amp.html",
+    # )
     # parser.add_argument(
     #     "--n_tpu_cores",
     #     dest="tpu_cores",
@@ -389,8 +392,8 @@ def add_generic_args(parser, root_dir) -> None:
     parser.add_argument(
         "--gradient_accumulation_steps",
         dest="accumulate_grad_batches",
-        type=int,
         default=1,
+        type=int,
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     parser.add_argument(
@@ -403,11 +406,11 @@ def add_generic_args(parser, root_dir) -> None:
         action="store_true",
         help="Run the training."
     )
-    parser.add_argument(
-        "--do_test",
-        action="store_true",
-        help="Run the testing."
-    )
+    # parser.add_argument(
+    #     "--do_test",
+    #     action="store_true",
+    #     help="Run the testing."
+    # )
     # phase out _confidence and _sentiment with two separate LigtningDataModule
     parser.add_argument(
         "--do_predict_confidence",
@@ -427,15 +430,13 @@ def generic_train(
         logger=True,  # can pass WandbLogger() here
         extra_callbacks=[],
         checkpoint_callback=None,
-        logging_callback=None,
-        **extra_train_kwargs
+        logging_callback=None
+        # **extra_train_kwargs
     ):
     pl.seed_everything(args.seed)
 
-    # cache data if necessary
-    model.prepare_data()
-
-    if args.do_train:
+    # init dataloaders
+    if args.do_train or args.fast_dev_run:
         model.setup(stage="fit")
 
     if args.do_predict_confidence:
@@ -448,25 +449,26 @@ def generic_train(
     # add custom checkpoints
     if checkpoint_callback is None:
         checkpoint_callback = pl.callbacks.ModelCheckpoint(
-            filepath=args.output_dir, prefix="checkpoint", monitor="val_loss", mode="min", save_top_k=1
+            filepath=args.output_dir,
+            prefix="checkpoint",
+            monitor="val_loss",
+            mode="min",
+            save_top_k=1
         )
     if logging_callback is None:
         logging_callback = LoggingCallback()
 
     train_params = {}
 
+    if args.gpus >= 1:
+        train_params["benchmark"] = True
+        train_params["precision"] = 16
+        train_params["amp_backend"] = "apex"
+        train_params["amp_level"] = "O2"
+
     if args.gpus > 1:
         train_params["distributed_backend"] = "ddp"
-
-    # if args.fast_dev_run:
-    #     # there is a more pythonic way to do this - list comprehension
-    #     train = model.get_dataloader("train", args.train_batch_size)
-    #     val = model.get_dataloader("dev", args.train_batch_size)
-    #     test = model.get_dataloader("test", args.train_batch_size)
-
-    #     train_params["train_dataloader"] = train
-    #     train_params["val_dataloader"] = val
-    #     train_params["test_dataloader"] = test
+        train_params["auto_select_gpus"] = True
 
     trainer = pl.Trainer.from_argparse_args(
         args,

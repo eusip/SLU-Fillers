@@ -18,12 +18,6 @@ from transformers import glue_tasks_num_labels
 
 from utils import *
 
-# MODEL_NAME = "bert-base-cased"
-
-# torch.set_grad_enabled(False)
-
-# "sts-b"
-
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +34,14 @@ class BertForSequenceClassification(BaseTransformer):
 
         super().__init__(hparams, num_labels, self.mode)
 
+        # self.model = AutoModelForSequenceClassification.from_pretrained(self.hparams.model_name_or_path, num_labels=num_labels)
+
     def forward(self, **inputs):
         return self.model(**inputs)
+
+    @property
+    def total_steps(self) -> int:
+        return super().total_steps
 
     def training_step(self, batch, batch_idx):
         inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[2]}
@@ -71,7 +71,7 @@ class BertForSequenceClassification(BaseTransformer):
 
     def get_dataloader(self, type_path: str, batch_size: int, shuffle: bool = False) -> DataLoader:
         "Load datasets. Called after prepare data."
-
+        args = self.hparams
         cached_features_file = self._feature_file(type_path)
         logger.info("Loading features from cached file %s", cached_features_file)
         features = torch.load(cached_features_file)
@@ -83,6 +83,7 @@ class BertForSequenceClassification(BaseTransformer):
             TensorDataset(all_input_ids, all_attention_mask, all_labels),
             batch_size=batch_size,
             shuffle=shuffle,
+            num_workers=args.num_workers
         )
 
     def validation_step(self, batch, batch_idx):
@@ -95,32 +96,30 @@ class BertForSequenceClassification(BaseTransformer):
 
         return {"val_loss": tmp_eval_loss.detach().cpu(), "pred": preds, "target": out_label_ids}
 
-    def _eval_end(self, outputs) -> tuple:
+    def _eval_end(self, outputs: dict) -> tuple:
         val_loss_mean = torch.stack([x["val_loss"] for x in outputs]).mean().detach().cpu().item()
         preds = np.concatenate([x["pred"] for x in outputs], axis=0)
 
         if self.hparams.glue_output_mode == "classification":
             preds = np.argmax(preds, axis=1)
         elif self.hparams.glue_output_mode == "regression":
-            preds = np.squeeze(preds)
+            preds = np.squeeze(preds, axis=0)
 
         out_label_ids = np.concatenate([x["target"] for x in outputs], axis=0)
-        out_label_list = [[] for _ in range(out_label_ids.shape[0])]
-        preds_list = [[] for _ in range(out_label_ids.shape[0])]
 
         results = {**{"val_loss": val_loss_mean}, **compute_metrics(preds, out_label_ids)}
 
         ret = {k: v for k, v in results.items()}
         ret["log"] = results
-        return ret, preds_list, out_label_list
+        return ret
 
-    def validation_epoch_end(self, outputs: list) -> dict:
-        ret, preds, targets = self._eval_end(outputs)
+    def validation_epoch_end(self, outputs: dict) -> dict:
+        ret = self._eval_end(outputs)
         logs = ret["log"]
         return {"avg_val_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
 
-    def test_epoch_end(self, outputs) -> dict:
-        ret, preds, targets = self._eval_end(outputs)
+    def test_epoch_end(self, outputs: dict) -> dict:
+        ret = self._eval_end(outputs)
         logs = ret["log"]
         # `val_loss` is the key returned by `self._eval_end()` but actually refers to `test_loss`
         return {"avg_test_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
@@ -131,7 +130,7 @@ class BertForSequenceClassification(BaseTransformer):
 
         parser.add_argument(
             "--filler_case",
-            default="distinct",
+            default="no_filler",
             type=str,
             help="Set the filler case for this analysis - 'distinct', 'unique', 'none'.",
         )
@@ -148,23 +147,14 @@ class BertForSequenceClassification(BaseTransformer):
             help="The number of GPUs allocated for this, it is by default 0 meaning none",
         )
         parser.add_argument(
-            "--auto_select_gpus",
-            action="store_true",
-            help="Pick available GPUs automatically.",
-        )
-        parser.add_argument(
-            "--benchmark",
-            action="store_true",
-            help="Enables cudnn.deterministic for the Trainer instance.",
-        )
-        parser.add_argument(
             "--overwrite_cache",
             action="store_true",
             help="Overwrite the cached training and evaluation sets"
         )
         parser.add_argument(
             "--check_val_every_n_epoch",
-            action='store_true',
+            default=1,
+            type=int,
             help="Evaluate the model every n training epochs."
         )
         parser.add_argument(
@@ -191,73 +181,23 @@ def main():
         os.makedirs(args.output_dir)
 
     model = BertForSequenceClassification(args)
-    # trainer = generic_train(model, args)
 
-    if args.do_train:
-        trainer = generic_train(model,
-                                args,
-                                train_dataloader=model.train_dataloader,
-                                val_dataloaders=model.val_dataloader
-        )
+    if args.do_train or args.fast_dev_run:
+        trainer = generic_train(model, args)
         trainer.fit(model)
 
     if args.do_predict_confidence:
-        trainer = generic_train(model,
-                                args,
-                                test_dataloader=model.test_dataloader
-        )
+        trainer = generic_train(model, args)
         trainer.test(model)
 
-    if args.do_predict_sentiment:
-        pass
-
-    if args.fast_dev_run:
-        trainer = generic_train(model,
-                                args,
-                                train_dataloader=model.train_dataloader,
-                                val_dataloaders=model.val_dataloader,
-                                test_dataloader=model.test_dataloader
-        )
-        trainer.fit(model)
+    # if args.do_predict_sentiment:
+    #     pass
 
     # Predict on test set and write to output_dir
     # if args.do_predict_confidence:
     #     checkpoints = list(sorted(glob.glob(os.path.join(args.output_dir, "checkpointepoch=*.ckpt"), recursive=True)))
     #     model = model.load_from_checkpoint(checkpoints[-1])
     #     return trainer.test(model)
-
-# def main():
-#     parser = argparse.ArgumentParser()
-
-#     ## Required parameters
-#     parser.add_argument("--data_dir", default='.', type=str, required=False,
-#                         help="The input data dir. Should contain the .tsv files (or other data files) for the task.")
-#     parser.add_argument("--model_name", default="bert-base-cased", type=str, required=False,
-#                         help="Path to pre-trained model or shortcut name.")
-#     parser.add_argument("--task_name", default='foak', type=str, required=False,
-#                         help="The name of the task to train selected in the list: " + ", ")
-#     parser.add_argument("--output_dir", default=None, type=str, required=True,
-#                         help="The output directory where the model predictions and checkpoints will be written.")
-
-
-#     parser.add_argument("--filler_case", default='distinct', type=str, required=True,
-#                         help="Set the filler case for this analysis - 'distinct', 'unique', 'none'.")
-#     parser.add_argument("--local_rank", type=int, default=-1,
-#                         help="For distributed training: local_rank")
-
-#     args = parser.parse_args()
-
-#     # Setup logging
-#     logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
-#                         datefmt='%m/%d/%Y %H:%M:%S',
-#                         level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN)
-#     # logger.warning("Process rank: %s, device: %s, n_gpu: %s, distributed training: %s, 16-bits training: %s",
-#     #                args.local_rank, device, args.n_gpu, bool(args.local_rank != -1), args.fp16)
-
-#     model = AutoModelForSequenceClassification.from_pretrained(args.model_name, output_hidden_states=True, return_dict=True, num_labels=1)
-#     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-
-#     load_and_cache_examples(args, tokenizer, evaluate=False)
 
 
 if __name__ == "__main__":
