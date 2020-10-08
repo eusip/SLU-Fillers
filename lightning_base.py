@@ -6,6 +6,7 @@ from typing import Any, Dict
 
 import pytorch_lightning as pl
 from pytorch_lightning.utilities import rank_zero_info
+from pytorch_lightning.loggers import TensorBoardLogger
 
 from transformers import (
     AdamW,
@@ -29,8 +30,10 @@ from transformers.optimization import (
     get_polynomial_decay_schedule_with_warmup,
 )
 
-# a pl.loggers.TensorBoardLogger does exist
-logger = logging.getLogger(__name__)
+
+# logger = logging.getLogger(__name__)
+tb_logger = TensorBoardLogger("./output/runs", name="confidence_prediciton")
+
 
 
 MODEL_MODES = {
@@ -162,8 +165,8 @@ class BaseTransformer(pl.LightningModule):
     def test_step(self, batch, batch_nb):
         return self.validation_step(batch, batch_nb)
 
-    def test_epoch_end(self, outputs):
-        return self.validation_end(outputs)
+    # def test_epoch_end(self, outputs):
+    #     return self.validation_end(outputs)
 
     @property
     def total_steps(self) -> int:
@@ -334,15 +337,15 @@ class LoggingCallback(pl.Callback):
         rank_zero_info("***** Test results *****")
         metrics = trainer.callback_metrics
         # Log and save results to file
-        output_test_results_file = os.path.join(pl_module.hparams.output_dir, "test_results.txt")
+        output_test_results_file = os.path.join(pl_module.hparams.output_dir, "/results/test_results.txt")
         with open(output_test_results_file, "w") as writer:
             for key in sorted(metrics):
                 if key not in ["log", "progress_bar"]:
                     rank_zero_info("{} = {}\n".format(key, str(metrics[key])))
                     writer.write("{} = {}\n".format(key, str(metrics[key])))
 
-
 def add_generic_args(parser, root_dir) -> None:
+
     # parser = pl.Trainer.add_argparse_args(parser)  # bug
     parser.add_argument(
         "--data_dir",
@@ -406,28 +409,27 @@ def add_generic_args(parser, root_dir) -> None:
         action="store_true",
         help="Run the training."
     )
-    # parser.add_argument(
-    #     "--do_test",
-    #     action="store_true",
-    #     help="Run the testing."
-    # )
-    # phase out _confidence and _sentiment with two separate LigtningDataModule
+    parser.add_argument(
+        "--use_lm",
+        action="store_true",
+        help="Run the testing using the model trained by MLM."
+    )
     parser.add_argument(
         "--do_predict_confidence",
         action="store_true",
         help="Whether to run confidence predictions on the test set."
     )
-    parser.add_argument(
-        "--do_predict_sentiment",
-        action="store_true",
-        help="Whether to run sentiment predictions on the test set."
-    )
+    # parser.add_argument(
+    #     "--do_predict_sentiment",
+    #     action="store_true",
+    #     help="Whether to run sentiment predictions on the test set."
+    # )
 
 def generic_train(
         model: BaseTransformer,
         args: argparse.Namespace,
         early_stopping_callback=False,
-        logger=True,  # can pass WandbLogger() here
+        logger=tb_logger,
         extra_callbacks=[],
         checkpoint_callback=None,
         logging_callback=None
@@ -442,9 +444,13 @@ def generic_train(
     if args.do_predict_confidence:
         model.setup(stage="test")
 
-    # init model
-    odir = Path(model.hparams.output_dir)
-    odir.mkdir(exist_ok=True)
+    # # init logger
+    # ldir = Path(os.path.join(model.hparams.output_dir, "/results"))
+    # ldir.mkdir(0o755,exist_ok=True)
+
+    # # init model
+    # odir = Path(model.hparams.output_dir)
+    # odir.mkdir(0o755, exist_ok=True)
 
     # add custom checkpoints
     if checkpoint_callback is None:
@@ -477,7 +483,7 @@ def generic_train(
         logger=logger,
         checkpoint_callback=checkpoint_callback,
         early_stop_callback=early_stopping_callback,
-        **train_params,
+        **train_params
     )
 
     return trainer

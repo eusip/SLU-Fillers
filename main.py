@@ -8,21 +8,20 @@ from argparse import Namespace
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
-
 from torch.utils.tensorboard import SummaryWriter
-from lightning_base import BaseTransformer, add_generic_args, generic_train
-from transformers import BertTokenizer
+
+# from transformers import BertTokenizer
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from transformers import glue_output_modes
 from transformers import glue_tasks_num_labels
 
-from utils import *
-
+from utils import load_tsv, max_length, convert_examples_to_features, compute_metrics
+from lightning_base import BaseTransformer, add_generic_args, generic_train
 
 logger = logging.getLogger(__name__)
 
 
-class BertForSequenceClassification(BaseTransformer):
+class Regression(BaseTransformer):
 
     mode = "sequence-classification"
 
@@ -103,7 +102,7 @@ class BertForSequenceClassification(BaseTransformer):
         if self.hparams.glue_output_mode == "classification":
             preds = np.argmax(preds, axis=1)
         elif self.hparams.glue_output_mode == "regression":
-            preds = np.squeeze(preds, axis=0)
+            preds = np.squeeze(preds)
 
         out_label_ids = np.concatenate([x["target"] for x in outputs], axis=0)
 
@@ -169,35 +168,31 @@ class BertForSequenceClassification(BaseTransformer):
 def main():
     parser = argparse.ArgumentParser()
     add_generic_args(parser, os.getcwd())
-    parser = BertForSequenceClassification.add_model_specific_args(parser, os.getcwd())
+    parser = Regression.add_model_specific_args(parser, os.getcwd())
     args = parser.parse_args()
 
-    # If output_dir not provided, a folder will be generated in pwd
-    if args.output_dir is None:
-        args.output_dir = os.path.join(
-            "./results",
-            f"{args.task}_{time.strftime('%Y%m%d_%H%M%S')}",
-        )
-        os.makedirs(args.output_dir)
+    # # If output_dir not provided, a folder will be generated in pwd
+    # if args.output_dir is None:
+    #     args.output_dir = os.path.join(
+    #         "./results",
+    #         f"{args.task}_{time.strftime('%Y%m%d_%H%M%S')}",
+    #     )
+    #     os.makedirs(args.output_dir)
 
-    model = BertForSequenceClassification(args)
+    model = Regression(args)
 
     if args.do_train or args.fast_dev_run:
         trainer = generic_train(model, args)
         trainer.fit(model)
 
     if args.do_predict_confidence:
-        trainer = generic_train(model, args)
+        if args.use_mlm:
+            pass
+            # model = model.load_from_checkpoint()
+            # trainer.test(model)
+        checkpoints = list(sorted(glob.glob(os.path.join(args.output_dir, "checkpointepoch=*.ckpt"), recursive=True)))
+        model = model.load_from_checkpoint(checkpoints[-1])
         trainer.test(model)
-
-    # if args.do_predict_sentiment:
-    #     pass
-
-    # Predict on test set and write to output_dir
-    # if args.do_predict_confidence:
-    #     checkpoints = list(sorted(glob.glob(os.path.join(args.output_dir, "checkpointepoch=*.ckpt"), recursive=True)))
-    #     model = model.load_from_checkpoint(checkpoints[-1])
-    #     return trainer.test(model)
 
 
 if __name__ == "__main__":

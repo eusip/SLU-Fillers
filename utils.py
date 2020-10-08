@@ -20,13 +20,15 @@ from sklearn.metrics import mean_squared_error
 logger = logging.getLogger(__name__)
 
 
-CONFIDENCE_DATASETS = {"distinct": ("train_classif.tsv",
+CONFIDENCE_DATASETS = {"distinct": (
+                            "train_classif.tsv",
                             "val_classif.tsv",
                             "test_classif.tsv"
                         ),
-                        "unique": ("train_classif_unique.tsv",
-                        "val_classif_unique.tsv",
-                        "test_classif_unique.tsv"
+                        "unique": (
+                            "train_classif_unique.tsv",
+                            "val_classif_unique.tsv",
+                            "test_classif_unique.tsv"
                         ),
                         "no_filler": (
                             "train_classif_without_fillers.tsv",
@@ -40,8 +42,8 @@ def load_tsv(filler_case, dir, type_path):
     """Load the dataset into a pandas dataframe.
 
     Args:
-            filler_case: "distinct", "unique", "no_filler".
-            dir: File path string.
+            filler_case: "distinct", "unique", "no_filler"
+            dir: File path string
             type_path: "train", "dev", "test"
     """
     if type_path == "train":
@@ -75,6 +77,38 @@ def max_length(df, tokenizer):
     return max_len
 
 def convert_examples_to_features(data, tokenizer, max_length):
+    """ Convert each review into a tensor of length 512, the maximum for BERT base.
+
+    Note: https://huggingface.co/transformers/v2.4.0/_modules/transformers/data/processors/glue.html
+
+    Args:
+            data: Panda dataframe containing examples and labels.
+    """
+    input_ids = []
+    attention_masks = []
+    labels = []
+    features = []
+
+    examples = data.example.values
+
+    for idx, example in enumerate(examples):
+        encoded_dict = tokenizer.encode_plus(example,
+                            add_special_tokens = True,
+                            truncation = True,
+                            padding = 'max_length',
+                            return_attention_mask = True,
+                            return_tensors = 'pt',
+                        )
+        input_ids.append(encoded_dict['input_ids'])
+        attention_masks.append(encoded_dict['attention_mask'])
+        labels.append(torch.tensor(data.label[idx], dtype=torch.float))
+
+    for idx,_ in enumerate(input_ids):
+        features.append(InputFeatures(input_id=input_ids[idx].squeeze(), attention_mask=attention_masks[idx].squeeze(), label_id=labels[idx]))
+
+    return features
+
+def convert_examples_to_features_multi(data, tokenizer, max_length):
     """ Convert each sentence of an example into a tensor uniform in the dimension `max_length`.
 
     Note: https://huggingface.co/transformers/v2.4.0/_modules/transformers/data/processors/glue.html
@@ -102,7 +136,7 @@ def convert_examples_to_features(data, tokenizer, max_length):
                             )
             input_ids.append(encoded_dict['input_ids'])
             attention_masks.append(encoded_dict['attention_mask'])
-            labels.append(torch.tensor(data.label.values[idx], dtype=torch.float))
+            labels.append(torch.tensor(data.label[idx], dtype=torch.float))
 
     for idx,_ in enumerate(input_ids):
         features.append(InputFeatures(input_id=input_ids[idx].squeeze(), attention_mask=attention_masks[idx].squeeze(), label_id=labels[idx]))
@@ -110,7 +144,7 @@ def convert_examples_to_features(data, tokenizer, max_length):
     return features
 
 def convert_examples_to_features_batch(data, tokenizer, max_length):
-    """ Convert each example into a tensor uniform in the dimensions number of sentences and
+    """ Convert each review into a tensor uniform in the dimensions number of sentences and
         `max_length`.
 
     Note: https://huggingface.co/transformers/v2.4.0/_modules/transformers/data/processors/glue.html
@@ -140,10 +174,10 @@ def convert_examples_to_features_batch(data, tokenizer, max_length):
     attention_masks = pad_sequence(attention_masks, batch_first=True)
     label_ids = torch.tensor(data.label.values, dtype=torch.float)
 
-    for i in range(len(examples)):
-        input_id = input_ids.narrow(0, i, 1).squeeze().permute(1, 0)  # B x F x S --> B x S x F
-        attention_mask = attention_masks.narrow(0, i, 1).squeeze().permute(1, 0)  # B x F x S --> B x S x F
-        label_id = label_ids.narrow(0, i, 1)
+    for idx,_ in enumerate(examples):
+        input_id = input_ids.narrow(0, idx, 1).squeeze().permute(1, 0)  # B x F x S --> B x S x F
+        attention_mask = attention_masks.narrow(0, idx, 1).squeeze().permute(1, 0)  # B x F x S --> B x S x F
+        label_id = label_ids.narrow(0, idx, 1)
         features.append(InputFeatures(input_id=input_id, attention_mask=attention_mask, label_id=label_id))
 
     return features
