@@ -335,9 +335,9 @@ class LoggingCallback(pl.Callback):
 
     def on_test_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         rank_zero_info("***** Test results *****")
-        metrics = trainer.callback_metrics
+        metrics = trainer.callback_metrics  # rename val_loss to test loss 
         # Log and save results to file
-        output_test_results_file = os.path.join(pl_module.hparams.output_dir, "/results/test_results.txt")
+        output_test_results_file = os.path.join(pl_module.hparams.output_dir, "results/test_results.txt")
         with open(output_test_results_file, "w") as writer:
             for key in sorted(metrics):
                 if key not in ["log", "progress_bar"]:
@@ -352,7 +352,7 @@ def add_generic_args(parser, root_dir) -> None:
         default="./data",
         type=str,
         # required=True,
-        help="The input data dir. Should contain the training files for the CoNLL-2003 NER task.",
+        help="The input data dir. Should contain the training files based on the POM (2014) dataset.",
     )
     parser.add_argument(
         "--output_dir",
@@ -468,9 +468,9 @@ def generic_train(
 
     if args.gpus >= 1:
         train_params["benchmark"] = True
-        train_params["precision"] = 16
-        train_params["amp_backend"] = "apex"
-        train_params["amp_level"] = "O2"
+        train_params["precision"] = 32
+        train_params["amp_backend"] = "native"
+        # train_params["amp_level"] = "O2"
 
     if args.gpus > 1:
         train_params["distributed_backend"] = "ddp"

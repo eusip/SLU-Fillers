@@ -21,7 +21,7 @@ from lightning_base import BaseTransformer, add_generic_args, generic_train
 logger = logging.getLogger(__name__)
 
 
-class Regression(BaseTransformer):
+class Prediction(BaseTransformer):
 
     mode = "sequence-classification"
 
@@ -32,8 +32,6 @@ class Regression(BaseTransformer):
         num_labels = glue_tasks_num_labels[hparams.task]
 
         super().__init__(hparams, num_labels, self.mode)
-
-        # self.model = AutoModelForSequenceClassification.from_pretrained(self.hparams.model_name_or_path, num_labels=num_labels)
 
     def forward(self, **inputs):
         return self.model(**inputs)
@@ -134,6 +132,11 @@ class Regression(BaseTransformer):
             help="Set the filler case for this analysis - 'distinct', 'unique', 'none'.",
         )
         parser.add_argument(
+            "--use_mlm",
+            action="store_true",
+            help="The trained MLM model ('fine-tuned') is loaded instead of the trained pretrained BERT model ('not fine-tuned')"
+        )
+        parser.add_argument(
             "--task",
             default="sts-b",
             type=str,
@@ -168,7 +171,7 @@ class Regression(BaseTransformer):
 def main():
     parser = argparse.ArgumentParser()
     add_generic_args(parser, os.getcwd())
-    parser = Regression.add_model_specific_args(parser, os.getcwd())
+    parser = Prediction.add_model_specific_args(parser, os.getcwd())
     args = parser.parse_args()
 
     # # If output_dir not provided, a folder will be generated in pwd
@@ -179,18 +182,23 @@ def main():
     #     )
     #     os.makedirs(args.output_dir)
 
-    model = Regression(args)
+    # if args.use_mlm:
+    #    model = PredictionFT()
+
+    model = Prediction(args)
 
     if args.do_train or args.fast_dev_run:
         trainer = generic_train(model, args)
         trainer.fit(model)
 
     if args.do_predict_confidence:
+        trainer = generic_train(model, args)
         if args.use_mlm:
             pass
             # model = model.load_from_checkpoint()
             # trainer.test(model)
         checkpoints = list(sorted(glob.glob(os.path.join(args.output_dir, "checkpointepoch=*.ckpt"), recursive=True)))
+        print('checkpoints', checkpoints)
         model = model.load_from_checkpoint(checkpoints[-1])
         trainer.test(model)
 

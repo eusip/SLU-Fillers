@@ -13,7 +13,6 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import TensorDataset
 from transformers import BertTokenizer
-# from transformers import AutoConfig, AutoModel, AutoTokenizer
 from sklearn.metrics import mean_squared_error
 
 
