@@ -12,11 +12,7 @@ from torch.utils.data import (
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import TensorDataset
-<<<<<<< HEAD
 from transformers import BertTokenizer, TextDataset
-=======
-from transformers import BertTokenizer
->>>>>>> 72299ec4fd855c648d5e2ae48d97cd8f04171056
 from sklearn.metrics import mean_squared_error
 
 
