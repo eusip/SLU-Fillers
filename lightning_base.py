@@ -347,7 +347,11 @@ class LoggingCallback(pl.Callback):
 
     def on_test_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         rank_zero_info("***** Test results *****")
+<<<<<<< HEAD
         metrics = trainer.callback_metrics  # rename val_loss to test loss
+=======
+        metrics = trainer.callback_metrics  # rename val_loss to test loss 
+>>>>>>> 72299ec4fd855c648d5e2ae48d97cd8f04171056
         # Log and save results to file
         output_test_results_file = os.path.join(pl_module.hparams.output_dir, "results/test_results.txt")
         with open(output_test_results_file, "w") as writer:

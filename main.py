@@ -133,6 +133,11 @@ class Prediction(BaseTransformer):
             help="Set the filler case for this analysis - 'distinct', 'unique', 'none'.",
         )
         parser.add_argument(
+            "--use_mlm",
+            action="store_true",
+            help="The trained MLM model ('fine-tuned') is loaded instead of the trained pretrained BERT model ('not fine-tuned')"
+        )
+        parser.add_argument(
             "--task",
             default="sts-b",
             type=str,
@@ -167,8 +172,12 @@ class Prediction(BaseTransformer):
 def main():
     parser = argparse.ArgumentParser()
     add_generic_args(parser, os.getcwd())
+<<<<<<< HEAD
     # parser = Prediction.add_model_specific_args(parser, os.getcwd())
     parser = PredictionFT.add_model_specific_args(parser, os.getcwd())
+=======
+    parser = Prediction.add_model_specific_args(parser, os.getcwd())
+>>>>>>> 72299ec4fd855c648d5e2ae48d97cd8f04171056
     args = parser.parse_args()
 
     # # If output_dir not provided, a folder will be generated in pwd
@@ -179,6 +188,7 @@ def main():
     #     )
     #     os.makedirs(args.output_dir)
 
+<<<<<<< HEAD
     # if do_perplexity and not args.use_mlm:
     #     model = Bert(args)
     # else:
@@ -191,6 +201,12 @@ def main():
 
     # model = Prediction(args)
     model = PredictionFT(args)
+=======
+    # if args.use_mlm:
+    #    model = PredictionFT()
+
+    model = Prediction(args)
+>>>>>>> 72299ec4fd855c648d5e2ae48d97cd8f04171056
 
     if args.do_train or args.fast_dev_run:
         trainer = generic_train(model, args)
