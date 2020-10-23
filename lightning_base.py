@@ -1,6 +1,8 @@
 import argparse
 import logging
 import os
+import datetime
+import socket
 from pathlib import Path
 from typing import Any, Dict
 
@@ -17,7 +19,7 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
-    AutoModelWithLMHead,
+    AutoModelForMaskedLM,
     AutoTokenizer,
     PretrainedConfig,
     PreTrainedTokenizer,
@@ -32,8 +34,6 @@ from transformers.optimization import (
 
 
 # logger = logging.getLogger(__name__)
-tb_logger = TensorBoardLogger("./output/runs", name="confidence_prediciton")
-
 
 
 MODEL_MODES = {
@@ -42,7 +42,7 @@ MODEL_MODES = {
     "question-answering": AutoModelForQuestionAnswering,
     "pretraining": AutoModelForPreTraining,
     "token-classification": AutoModelForTokenClassification,
-    "language-modeling": AutoModelWithLMHead,
+    "language-modeling": AutoModelForMaskedLM,
     "summarization": AutoModelForSeq2SeqLM,
     "translation": AutoModelForSeq2SeqLM,
 }
@@ -108,6 +108,12 @@ class BaseTransformer(pl.LightningModule):
             )
         else:
             self.tokenizer: PreTrainedTokenizer = tokenizer
+
+        # accomodate filler case
+        if hparams.filler_case == "distinct":
+            self.tokenizer.add_tokens(['(umm)', '(uhh)'])
+        if hparams.filler_case == "unique":
+            self.tokenizer.add_tokens(['[FILLER_WORD]'])
 
         # retrieve model
         self.model_type = MODEL_MODES[mode]
@@ -177,7 +183,13 @@ class BaseTransformer(pl.LightningModule):
         return int((dataset_size / effective_batch_size) * self.hparams.max_epochs)
 
     def setup(self, stage):
-        self.prepare_data()
+        if self.hparams.use_mlm:
+            if stage == "fit":
+                self.train_loader = self.get_dataloader("train", self.hparams.train_batch_size, shuffle=True)
+            elif stage == "test":
+                self.val_loader = self.get_dataloader("dev", self.hparams.train_batch_size, shuffle=False)
+
+        # self.prepare_data() # should automatically be called by trainer prior to setup
         self.train_loader = self.get_dataloader("train", self.hparams.train_batch_size, shuffle=True)
         if stage == "fit":
             self.val_loader = self.get_dataloader("dev", self.hparams.eval_batch_size, shuffle=False)
@@ -224,7 +236,7 @@ class BaseTransformer(pl.LightningModule):
         )
         parser.add_argument(
             "--config_name",
-            default="",
+            default="bert-base-cased",
             type=str,
             help="Pretrained config name or path if not the same as model_name"
         )
@@ -335,14 +347,15 @@ class LoggingCallback(pl.Callback):
 
     def on_test_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         rank_zero_info("***** Test results *****")
-        metrics = trainer.callback_metrics
+        metrics = trainer.callback_metrics  # rename val_loss to test loss
         # Log and save results to file
-        output_test_results_file = os.path.join(pl_module.hparams.output_dir, "/results/test_results.txt")
+        output_test_results_file = os.path.join(pl_module.hparams.output_dir, "results/test_results.txt")
         with open(output_test_results_file, "w") as writer:
             for key in sorted(metrics):
                 if key not in ["log", "progress_bar"]:
                     rank_zero_info("{} = {}\n".format(key, str(metrics[key])))
                     writer.write("{} = {}\n".format(key, str(metrics[key])))
+
 
 def add_generic_args(parser, root_dir) -> None:
 
@@ -352,7 +365,7 @@ def add_generic_args(parser, root_dir) -> None:
         default="./data",
         type=str,
         # required=True,
-        help="The input data dir. Should contain the training files for the CoNLL-2003 NER task.",
+        help="The input data dir. Should contain the training files based on the POM (2014) dataset.",
     )
     parser.add_argument(
         "--output_dir",
@@ -410,26 +423,26 @@ def add_generic_args(parser, root_dir) -> None:
         help="Run the training."
     )
     parser.add_argument(
-        "--use_lm",
+        "--use_mlm",
+        action="store_false",
+        help="Model training and evaluation using MLM modelling"
+    )
+    parser.add_argument(
+        "--do_perplexity",
         action="store_true",
-        help="Run the testing using the model trained by MLM."
+        help="Whether to compute perplexity on the test set."
     )
     parser.add_argument(
         "--do_predict_confidence",
         action="store_true",
-        help="Whether to run confidence predictions on the test set."
+        help="Whether to compute a confidence prediction on the test set."
     )
-    # parser.add_argument(
-    #     "--do_predict_sentiment",
-    #     action="store_true",
-    #     help="Whether to run sentiment predictions on the test set."
-    # )
 
 def generic_train(
         model: BaseTransformer,
         args: argparse.Namespace,
         early_stopping_callback=False,
-        logger=tb_logger,
+        logger=None,
         extra_callbacks=[],
         checkpoint_callback=None,
         logging_callback=None
@@ -444,7 +457,14 @@ def generic_train(
     if args.do_predict_confidence:
         model.setup(stage="test")
 
-    # # init logger
+    # init Tensorboard logger
+    # tb_logger = TensorBoardLogger(os.path.join(args.output_dir, "runs",
+    #                               "_".join(socket.gethostname(),
+    #                               datetime.now().strftime('%Y-%m-%d_%H-%M'))),
+    #                               name="confidence_prediction")
+    tb_logger = TensorBoardLogger(os.path.join(args.output_dir, "output/runs"), name="confidence_prediction")
+
+    # # init test results
     # ldir = Path(os.path.join(model.hparams.output_dir, "/results"))
     # ldir.mkdir(0o755,exist_ok=True)
 
@@ -468,9 +488,9 @@ def generic_train(
 
     if args.gpus >= 1:
         train_params["benchmark"] = True
-        train_params["precision"] = 16
-        train_params["amp_backend"] = "apex"
-        train_params["amp_level"] = "O2"
+        train_params["precision"] = 32
+        train_params["amp_backend"] = "native"
+        # train_params["amp_level"] = "O2"
 
     if args.gpus > 1:
         train_params["distributed_backend"] = "ddp"
@@ -480,7 +500,7 @@ def generic_train(
         args,
         weights_summary=None,
         callbacks=[logging_callback] + extra_callbacks,
-        logger=logger,
+        logger=tb_logger,
         checkpoint_callback=checkpoint_callback,
         early_stop_callback=early_stopping_callback,
         **train_params
