@@ -371,6 +371,7 @@ class PredictionFT(BaseTransformer):
         self.classifier = nn.Linear(self.config.hidden_size, num_labels)
 
     def forward(self, **inputs):
+        labels = inputs["labels"]
         outputs = self.model(**inputs)
 
         hidden_states = outputs[2]  # hidden states
@@ -378,7 +379,7 @@ class PredictionFT(BaseTransformer):
         pooled_output = self.dropout(hidden_states)
         logits = self.classifier(pooled_output)
 
-        # move everything below to training step
+        # move everything below to training_step()
 
         loss = None
         #  We are doing regression
