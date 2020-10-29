@@ -172,7 +172,7 @@ class BaseTransformer(pl.LightningModule):
         return self.validation_step(batch, batch_nb)
 
     # def test_epoch_end(self, outputs):
-    #     return self.validation_end(outputs)
+    #     return self.validation_epoch_end(outputs)
 
     @property
     def total_steps(self) -> int:
@@ -183,11 +183,11 @@ class BaseTransformer(pl.LightningModule):
         return int((dataset_size / effective_batch_size) * self.hparams.max_epochs)
 
     def setup(self, stage):
-        if self.hparams.use_mlm:
-            if stage == "fit":
-                self.train_loader = self.get_dataloader("train", self.hparams.train_batch_size, shuffle=True)
-            elif stage == "test":
-                self.val_loader = self.get_dataloader("dev", self.hparams.train_batch_size, shuffle=False)
+        # if self.hparams.use_mlm:
+        #     if stage == "fit":
+        #         self.train_loader = self.get_dataloader("train", self.hparams.train_batch_size, shuffle=True)
+        #     elif stage == "test":
+        #         self.val_loader = self.get_dataloader("dev", self.hparams.train_batch_size, shuffle=False)
 
         # self.prepare_data() # should automatically be called by trainer prior to setup
         self.train_loader = self.get_dataloader("train", self.hparams.train_batch_size, shuffle=True)
@@ -221,7 +221,7 @@ class BaseTransformer(pl.LightningModule):
     @pl.utilities.rank_zero_only
     def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         save_path = self.output_dir.joinpath("best_tfmr")
-        self.model.config.save_step = self.step_count
+        self.model.config.save_step = self.step_count  # check if/where this is being updated
         self.model.save_pretrained(save_path)
         self.tokenizer.save_pretrained(save_path)
 
@@ -364,14 +364,12 @@ def add_generic_args(parser, root_dir) -> None:
         "--data_dir",
         default="./data",
         type=str,
-        # required=True,
         help="The input data dir. Should contain the training files based on the POM (2014) dataset.",
     )
     parser.add_argument(
         "--output_dir",
         default="./output",
         type=str,
-        # required=True,
         help="The output directory where the model predictions and checkpoints will be written.",
     )
     # parser.add_argument(
@@ -392,11 +390,6 @@ def add_generic_args(parser, root_dir) -> None:
     #     default="O2",
     #     help="Apex AMP optimization level selected in ['O0', 'O1', 'O2', and 'O3']."
     #     "See details at https://nvidia.github.io/apex/amp.html",
-    # )
-    # parser.add_argument(
-    #     "--n_tpu_cores",
-    #     dest="tpu_cores",
-    #     type=int
     # )
     parser.add_argument(
         "--max_grad_norm",
@@ -425,7 +418,7 @@ def add_generic_args(parser, root_dir) -> None:
     parser.add_argument(
         "--use_mlm",
         action="store_false",
-        help="Model training and evaluation using MLM modelling"
+        help="Model training using MLM modelling"
     )
     parser.add_argument(
         "--do_perplexity",

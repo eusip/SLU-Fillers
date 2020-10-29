@@ -1,8 +1,8 @@
 import re
 import logging
-import pandas as pd
 import os
 
+import pandas as pd
 import torch
 from torch.utils.data import (
     DataLoader,
@@ -11,12 +11,15 @@ from torch.utils.data import (
 )
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.utils.rnn import pad_sequence
+from torch.nn import CrossEntropyLoss
 from torch.utils.data import TensorDataset
 from transformers import BertTokenizer, TextDataset
+from transformers.modeling_bert import BertModel, BertOnlyMLMHead, BertPreTrainedModel
+from transformers.file_utils import ModelOutput
 from sklearn.metrics import mean_squared_error
 
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 CONFIDENCE_DATASETS = {"distinct": (
@@ -235,6 +238,7 @@ def convert_examples_to_features_batch(data, tokenizer, max_length):
 
     return features
 
+
 class InputFeatures(object):
   """A single set of features of data."""
 
@@ -251,8 +255,100 @@ def compute_metrics(preds, labels):
     mse = mean_squared_error(labels, preds)
     return {"mse": mse}
 
-if __name__ == "__main__":
-    tokenizer = BertTokenizer.from_pretrained("bert-base-cased")
-    data = load_tsv('no_filler', "./data", "test")
-    max_length = max_length(data, tokenizer)
-    convert_examples_to_features(data, tokenizer, max_length)
+
+class MaskedLMOutput(ModelOutput):
+    loss: [torch.FloatTensor] = None
+    logits: torch.FloatTensor = None
+    pooler_output: torch.FloatTensor = None
+
+
+class BertForMaskedLM(BertPreTrainedModel):
+    """ A modified version of BertForMaskedLM that trains on the MLM task and also """
+    authorized_unexpected_keys = [r"pooler"]
+    authorized_missing_keys = [r"position_ids", r"predictions.decoder.bias"]
+
+    def __init__(self, config):
+        super().__init__(config)
+
+        if config.is_decoder:
+            logger.warning(
+                "If you want to use `BertForMaskedLM` make sure `config.is_decoder=False` for "
+                "bi-directional self-attention."
+            )
+
+        self.bert = BertModel(config)
+        self.cls = BertOnlyMLMHead(config)
+
+        self.init_weights()
+
+    def get_output_embeddings(self):
+        return self.cls.predictions.decoder
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        labels=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+        **kwargs
+    ):
+
+        if "masked_lm_labels" in kwargs:
+            warnings.warn(
+                "The `masked_lm_labels` argument is deprecated and will be removed in a future version, use `labels` instead.",
+                FutureWarning,
+            )
+            labels = kwargs.pop("masked_lm_labels")
+        assert "lm_labels" not in kwargs, "Use `BertWithLMHead` for autoregressive language modeling task."
+        assert kwargs == {}, f"Unexpected keyword arguments: {list(kwargs.keys())}."
+
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.bert(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        sequence_output = outputs[0]
+        prediction_scores = self.cls(sequence_output)
+
+        pooled_output = outputs[1]
+
+        masked_lm_loss = None
+        if labels is not None:
+            loss_fct = CrossEntropyLoss()  # -100 index = padding token
+            masked_lm_loss = loss_fct(prediction_scores.view(-1, self.config.vocab_size), labels.view(-1))
+
+        if not return_dict:
+            output = (prediction_scores,) + ((pooled_output,))
+            return ((masked_lm_loss,) + output) if masked_lm_loss is not None else output
+
+        return MaskedLMOutput(
+            loss=masked_lm_loss,
+            logits=prediction_scores,
+            pooled_output=pooled_output,
+        )
+
+
+# if __name__ == "__main__":
+#     tokenizer = BertTokenizer.from_pretrained("bert-base-cased")
+#     data = load_tsv('no_filler', "./data", "test")
+#     max_length = max_length(data, tokenizer)
+#     convert_examples_to_features(data, tokenizer, max_length)
