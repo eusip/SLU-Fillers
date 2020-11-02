@@ -1,6 +1,7 @@
 import re
 import logging
 import os
+import warnings 
 
 import pandas as pd
 import torch
@@ -19,7 +20,7 @@ from transformers.file_utils import ModelOutput
 from sklearn.metrics import mean_squared_error
 
 
-# logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 CONFIDENCE_DATASETS = {"distinct": (
@@ -40,8 +41,7 @@ CONFIDENCE_DATASETS = {"distinct": (
 }
 
 
-# remove filler_case arguement, use argparser
-def load_and_cache_examples_lm(filler_case, dir, args, tokenizer, evaluate=False):
+def load_and_cache_examples_lm(args, tokenizer, evaluate=False):
     """Load and cache raw data.
 
     Args:
@@ -51,12 +51,11 @@ def load_and_cache_examples_lm(filler_case, dir, args, tokenizer, evaluate=False
             tokenizer: An instance of the relevant tokenizer.
     """
     if evaluate:
-        file_path = os.path.join(dir, CONFIDENCE_DATASETS[filler_case][1])
+        file_path = os.path.join(args.data_dir, CONFIDENCE_DATASETS[args.filler_case][1])
     else:
-        file_path = os.path.join(dir, CONFIDENCE_DATASETS[filler_case][0])
+        file_path = os.path.join(args.data_dir, CONFIDENCE_DATASETS[args.filler_case][0])
 
     dataset = TextDataset(tokenizer,
-                        # args,
                         file_path,
                         block_size=args.block_size,
                         overwrite_cache=args.overwrite_cache,
@@ -101,35 +100,6 @@ def max_length(df, tokenizer):
             max_len = max(max_len, len(segment))
 
     return max_len
-
-# remove
-def convert_examples_to_features_lm(data, tokenizer, max_length):
-    """ Convert each sentence of an example into a tensor uniform in the dimension `max_length`.
-
-    Note: https://huggingface.co/transformers/v2.4.0/_modules/transformers/data/processors/glue.html
-
-    Args:
-            data: Panda dataframe containing examples and labels.
-    """
-    input_ids = []
-    attention_masks = []
-    labels = []
-    features = []
-
-    examples = data.example.values
-
-    for idx, example in enumerate(examples):
-        sentences = re.split("\.\s+", example.rstrip(".").strip())
-        for sentence in sentences:
-            encoded_dict = tokenizer.encode_plus(sentence,
-                                add_special_tokens = True,
-                                max_length = max_length,
-                                truncation = True,
-                                padding = 'max_length',
-                                return_attention_mask = True,
-                                return_tensors = 'pt',
-                            )
-            input_ids.append(encoded_dict['input_ids'])
 
 def convert_examples_to_features(data, tokenizer, max_length):
     """ Convert each review into a tensor of length 512, the maximum for BERT base.
@@ -273,7 +243,7 @@ class BertForMaskedLM(BertPreTrainedModel):
         if config.is_decoder:
             logger.warning(
                 "If you want to use `BertForMaskedLM` make sure `config.is_decoder=False` for "
-                "bi-directional self-attention."
+                "bi-directional self-a;;;;;;;;; ttention."
             )
 
         self.bert = BertModel(config)
@@ -345,10 +315,3 @@ class BertForMaskedLM(BertPreTrainedModel):
             logits=prediction_scores,
             pooled_output=pooled_output,
         )
-
-
-# if __name__ == "__main__":
-#     tokenizer = BertTokenizer.from_pretrained("bert-base-cased")
-#     data = load_tsv('no_filler', "./data", "test")
-#     max_length = max_length(data, tokenizer)
-#     convert_examples_to_features(data, tokenizer, max_length)

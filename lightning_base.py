@@ -231,7 +231,6 @@ class BaseTransformer(pl.LightningModule):
             "--model_name_or_path",
             default="bert-base-cased",
             type=str,
-            # required=True,
             help="Path to pretrained model or model identifier from huggingface.co/models",
         )
         parser.add_argument(
@@ -332,6 +331,7 @@ class BaseTransformer(pl.LightningModule):
 
 
 class LoggingCallback(pl.Callback):
+    # not certain this function is still needed when using self.log()
     def on_batch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         lr_scheduler = trainer.lr_schedulers[0]["scheduler"]
         lrs = {f"lr_group_{i}": lr for i, lr in enumerate(lr_scheduler.get_lr())}
@@ -372,6 +372,17 @@ def add_generic_args(parser, root_dir) -> None:
         type=str,
         help="The output directory where the model predictions and checkpoints will be written.",
     )
+    parser.add_argument(
+        "--overwrite_cache",
+        action="store_true",
+        help="Overwrite the cached training and evaluation sets"
+        )
+    parser.add_argument(
+        "--gpus",
+        default=0,
+        type=int,
+        help="The number of GPUs allocated for this, it is by default 0 meaning none",
+    )
     # parser.add_argument(
     #     "--precision",
     #     default=16,
@@ -380,7 +391,7 @@ def add_generic_args(parser, root_dir) -> None:
     # )
     # parser.add_argument(
     #     "--amp_backend",
-    #     default="apex",
+    #     default="amp",
     #     type=str,
     #     help="The PyTorch AMP `native` or NVIDIA `apex`.",
     # )
@@ -411,14 +422,20 @@ def add_generic_args(parser, root_dir) -> None:
         help="random seed for initialization"
     )
     parser.add_argument(
+        "--check_val_every_n_epoch",
+        default=1,
+        type=int,
+        help="Evaluate the model every n training epochs."
+    )
+    parser.add_argument(
         "--do_train",
         action="store_true",
         help="Run the training."
     )
     parser.add_argument(
-        "--use_mlm",
-        action="store_false",
-        help="Model training using MLM modelling"
+        "--do_test",
+        action="store_true",
+        help="Run the testing."
     )
     parser.add_argument(
         "--do_perplexity",
@@ -430,6 +447,16 @@ def add_generic_args(parser, root_dir) -> None:
         action="store_true",
         help="Whether to compute a confidence prediction on the test set."
     )
+    parser.add_argument(
+        "--use_mlm",
+        action="store_true",
+        help="Model training using MLM modelling"
+    )
+    parser.add_argument(
+        "--fast_dev_run",
+        action='store_true',
+        help="Runs 1 batch of train, test and val to find any bugs."
+    )
 
 def generic_train(
         model: BaseTransformer,
@@ -438,8 +465,8 @@ def generic_train(
         logger=None,
         extra_callbacks=[],
         checkpoint_callback=None,
-        logging_callback=None
-        # **extra_train_kwargs
+        logging_callback=None,
+        # extra_train_kwargs
     ):
     pl.seed_everything(args.seed)
 
@@ -447,16 +474,24 @@ def generic_train(
     if args.do_train or args.fast_dev_run:
         model.setup(stage="fit")
 
-    if args.do_predict_confidence:
+    if args.do_test:
         model.setup(stage="test")
 
     # init Tensorboard logger
+    if args.do_perplexity and args.use_mlm: 
+        tb_logger = TensorBoardLogger(os.path.join(args.output_dir, "runs"), name="perplexity_ft")
+    elif args.do_perplexity and not args.use_mlm:
+        tb_logger = TensorBoardLogger(os.path.join(args.output_dir, "runs"), name="perplexity")
+    elif args.do_predict_confidence and args.use_mlm:
+        tb_logger = TensorBoardLogger(os.path.join(args.output_dir, "runs"), name="prediction_ft")      
+    elif args.do_predict_confidence and not args.use_mlm:
+        tb_logger = TensorBoardLogger(os.path.join(args.output_dir, "runs"), name="prediction")
+
     # tb_logger = TensorBoardLogger(os.path.join(args.output_dir, "runs",
     #                               "_".join(socket.gethostname(),
     #                               datetime.now().strftime('%Y-%m-%d_%H-%M'))),
     #                               name="confidence_prediction")
-    tb_logger = TensorBoardLogger(os.path.join(args.output_dir, "output/runs"), name="confidence_prediction")
-
+    
     # # init test results
     # ldir = Path(os.path.join(model.hparams.output_dir, "/results"))
     # ldir.mkdir(0o755,exist_ok=True)
@@ -466,36 +501,50 @@ def generic_train(
     # odir.mkdir(0o755, exist_ok=True)
 
     # add custom checkpoints
+    if args.do_perplexity and args.use_mlm: 
+        filepath = os.path.join(args.output_dir, "checkpoints", "perplexity_ft")
+    elif args.do_perplexity and not args.use_mlm:
+        filepath = os.path.join(args.output_dir, "checkpoints", "perplexity")
+    elif args.do_predict_confidence and args.use_mlm:
+        filepath = os.path.join(args.output_dir, "checkpoints", "prediction_ft")
+    elif args.do_predict_confidence and not args.use_mlm:
+        filepath = os.path.join(args.output_dir, "checkpoints", "prediction")
+
     if checkpoint_callback is None:
         checkpoint_callback = pl.callbacks.ModelCheckpoint(
-            filepath=args.output_dir,
+            filepath=filepath, # args.output_dir,
             prefix="checkpoint",
             monitor="val_loss",
             mode="min",
             save_top_k=1
         )
+
     if logging_callback is None:
         logging_callback = LoggingCallback()
 
     train_params = {}
 
+    if args.gpus:
+        train_params["gpus"] = args.gpus
+
     if args.gpus >= 1:
         train_params["benchmark"] = True
         train_params["precision"] = 32
         train_params["amp_backend"] = "native"
-        # train_params["amp_level"] = "O2"
+        # train_params["amp_level"] = "O2"  # `apex` only
 
     if args.gpus > 1:
-        train_params["distributed_backend"] = "ddp"
+        train_params["accelerator"] = "ddp"
         train_params["auto_select_gpus"] = True
 
     trainer = pl.Trainer.from_argparse_args(
         args,
         weights_summary=None,
+        # comment line below if no logging_callback
         callbacks=[logging_callback] + extra_callbacks,
         logger=tb_logger,
         checkpoint_callback=checkpoint_callback,
-        early_stop_callback=early_stopping_callback,
+        # early_stop_callback=early_stopping_callback,
         **train_params
     )
 

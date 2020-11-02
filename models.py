@@ -12,7 +12,7 @@ from torch.nn import Dropout, Linear, MSELoss
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
 from transformers import AutoConfig, DataCollatorForLanguageModeling
-from transformers.modeling_bert import BertPooler
+from transformers.modeling_bert import BertPooler, BertLMHeadModel
 from transformers.modeling_outputs import SequenceClassifierOutput
 from transformers import glue_output_modes
 from transformers import glue_tasks_num_labels
@@ -29,9 +29,138 @@ from lightning_base import BaseTransformer, add_generic_args, generic_train
 
 logger = logging.getLogger(__name__)
 
-class Bert(BaseTransformer):
+class BertLM(BaseTransformer):
     """An instance of `BertModel`."""
-    pass
+
+    mode = "language-modeling"
+
+    def __init__(self, hparams):
+        if type(hparams) == dict:
+            hparams = Namespace(**hparams)
+        hparams.glue_output_mode = glue_output_modes[hparams.task]
+        num_labels = glue_tasks_num_labels[hparams.task]
+
+        config = AutoConfig.from_pretrained(
+                    hparams.config_name,
+                    **({"num_labels": num_labels}),
+                    cache_dir=hparams.cache_dir if hparams.cache_dir else None,
+                    is_decoder=True
+        )
+
+        model = BertLMHeadModel(config)
+
+        super().__init__(hparams, num_labels, self.mode, config=config, model=model)
+        self.data_collator = DataCollatorForLanguageModeling(tokenizer=self.tokenizer                                                      
+        )
+        self.collator_fn = self.data_collator._tensorize_batch
+
+    def forward(self, **inputs):
+        return self.model(**inputs)
+
+    @property
+    def total_steps(self) -> int:
+        return super().total_steps
+
+    def training_step(self, batch, batch_idx):
+        labels = batch.clone().detach()
+        if self.tokenizer.pad_token_id is not None:
+            labels[labels == self.tokenizer.pad_token_id] = -100
+        inputs = {"input_ids": batch, "labels": labels}
+
+        outputs = self(**inputs)
+        loss = outputs[0]
+        
+        lr_scheduler = self.trainer.lr_schedulers[0]["scheduler"]
+        # tensorboard_logs = {"loss": loss, "rate": lr_scheduler.get_last_lr()[-1]}
+        self.log("loss", loss)
+        self.log("rate", lr_scheduler.get_last_lr()[-1])
+        return {"loss": loss}
+
+    def get_dataloader(self, type_path: str, batch_size: int, shuffle: bool = False) -> DataLoader:
+        "Load datasets. Called after prepare data."
+        args = self.hparams
+
+        if type_path == "train":
+            dataset = load_and_cache_examples_lm(args,
+                                                self.tokenizer
+            )
+        if type_path == "dev":
+            dataset = load_and_cache_examples_lm(args,
+                                                self.tokenizer,
+                                                evaluate=True
+            )
+        loader = torch.utils.data.DataLoader(dataset=dataset,
+                                            batch_size=batch_size,
+                                            collate_fn=self.collator_fn,
+                                            shuffle=shuffle,
+                                            num_workers=args.num_workers
+        )
+
+        return loader
+
+    def validation_step(self, batch, batch_idx):
+        labels = batch.clone().detach()
+        if self.tokenizer.pad_token_id is not None:
+            labels[labels == self.tokenizer.pad_token_id] = -100
+        inputs = {"input_ids": batch, "labels": labels}
+
+        outputs = self(**inputs)
+        loss = outputs[0]
+        
+        self.log("val_loss", loss)
+
+        return {"val_loss": loss}
+
+    def _eval_end(self, outputs: dict) -> tuple:
+        val_loss_mean = torch.stack([x["val_loss"] for x in outputs]).mean().detach().cpu()
+
+        results = {**{"val_loss": val_loss_mean},  **{"perplexity": torch.exp(torch.tensor(val_loss_mean)).detach().cpu()}}
+
+        ret = {k: v for k, v in results.items()}
+        ret["log"] = results
+        return ret
+
+    def validation_epoch_end(self, outputs: dict) -> dict:
+        ret = self._eval_end(outputs)
+        logs = ret["log"]
+
+        self.log("avg_val_loss", logs["val_loss"], on_step=False)
+        self.log("perplexity", logs["perplexity"], on_step=False)
+        # return {"avg_val_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
+
+    def test_epoch_end(self, outputs: dict) -> dict:
+        ret = self._eval_end(outputs)
+        logs = ret["log"]
+
+        self.log("avg_val_loss", logs["val_loss"], on_step=False)
+        self.log("perplexity", logs["perplexity"], on_step=False)
+        # `val_loss` is the key returned by `self._eval_end()` but actually refers to `test_loss`
+        # return {"avg_test_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
+
+    @staticmethod
+    def add_model_specific_args(parser, root_dir):
+        BaseTransformer.add_model_specific_args(parser, root_dir)
+
+        parser.add_argument(
+            "--filler_case",
+            default="no_filler",
+            type=str,
+            help="Set the filler case for this analysis - 'distinct', 'unique', 'none'.",
+        )
+        parser.add_argument(
+            "--block_size",
+            default=512,
+            type=int,
+            help="The number of tokens to trained on during a single forward pass",
+        ) 
+        parser.add_argument(
+            "--task",
+            default="sts-b",
+            type=str,
+            help="The GLUE task to run",
+        )
+
+        return parser
 
 
 class Mlm(BaseTransformer):
@@ -52,7 +181,9 @@ class Mlm(BaseTransformer):
                     is_decoder=False
         )
 
-        super().__init__(hparams, num_labels, self.mode)
+        model = BertForMaskedLM(config)
+
+        super().__init__(hparams, num_labels, self.mode, config=config, model=model)
         self.data_collator = DataCollatorForLanguageModeling(
                                                             tokenizer=self.tokenizer,
                                                             mlm=True,
@@ -62,49 +193,44 @@ class Mlm(BaseTransformer):
         self.mask_tokens = self.data_collator.mask_tokens
 
     def forward(self, **inputs):
-        outputs = self.model(**inputs)
+        return self.model(**inputs)
 
     @property
     def total_steps(self) -> int:
         return super().total_steps
 
     def training_step(self, batch, batch_idx):
-        inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[2]}
+        inputs, labels = self.mask_tokens(batch)
+        inputs = {"input_ids": inputs, "labels": labels}
 
         outputs = self(**inputs)
         loss = outputs[0]
 
         lr_scheduler = self.trainer.lr_schedulers[0]["scheduler"]
-        tensorboard_logs = {"loss": loss, "rate": lr_scheduler.get_last_lr()[-1]}  # "perplexity": perplexity,
-        return {"loss": loss, "log": tensorboard_logs}
+        # tensorboard_logs = {"loss": loss, "rate": lr_scheduler.get_last_lr()[-1]}  # "perplexity": perplexity,
+        self.log("loss", loss)
+        self.log("rate", lr_scheduler.get_last_lr()[-1])
+        return {"loss": loss}
 
     def get_dataloader(self, type_path: str, batch_size: int, shuffle: bool = False) -> DataLoader:
         "Load datasets. Called after prepare data."
         args = self.hparams
 
         if type_path == "train":
-            dataset = load_and_cache_examples_lm(args.filler_case,
-                                            args.data_dir,
-                                            args,
-                                            self.tokenizer)
-            loader = DataLoader(dataset=dataset,
-                                            batch_size=batch_size,
-                                            collate_fn=self.collator_fn,
-                                            shuffle=shuffle,
-                                            num_workers=args.num_workers
+            dataset = load_and_cache_examples_lm(args,
+                                                self.tokenizer
             )
         if type_path == "dev":
-            dataset = load_and_cache_examples_lm(args.filler_case,
-                                            args.data_dir,
-                                            args,
-                                            self.tokenizer,
-                                            evaluate=True)
-            loader = torch.utils.data.DataLoader(dataset=dataset,
+            dataset = load_and_cache_examples_lm(args,
+                                                self.tokenizer,
+                                                evaluate=True
+            )
+        loader = torch.utils.data.DataLoader(dataset=dataset,
                                             batch_size=batch_size,
                                             collate_fn=self.collator_fn,
                                             shuffle=shuffle,
                                             num_workers=args.num_workers
-            )
+        )
 
         return loader
 
@@ -114,25 +240,16 @@ class Mlm(BaseTransformer):
         inputs = {"input_ids": inputs, "labels": labels}
 
         outputs = self(**inputs)
-        tmp_eval_loss, logits = outputs[:2]
-        preds = logits.detach().cpu().numpy()
-        out_label_ids = inputs["labels"].detach().cpu().numpy()
+        loss = outputs[0]
+        
+        self.log("val_loss", loss)
 
-        return {"val_loss": tmp_eval_loss.detach().cpu(), "pred": preds, "target": out_label_ids}
+        return {"val_loss": loss}
 
     def _eval_end(self, outputs: dict) -> tuple:
-        val_loss_mean = torch.stack([x["val_loss"] for x in outputs]).mean().detach().cpu().item()
-        # perplexity_mean = torch.stack([x["perplexity"] for x in outputs]).mean().detach().cpu().item()
-        # preds = np.concatenate([x["pred"] for x in outputs], axis=0)
+        val_loss_mean = torch.stack([x["val_loss"] for x in outputs]).mean().detach().cpu()
 
-        # if self.hparams.glue_output_mode == "classification":
-        #     preds = np.argmax(preds, axis=1)
-        # elif self.hparams.glue_output_mode == "regression":
-        #     preds = np.squeeze(preds)
-
-        # out_label_ids = np.concatenate([x["target"] for x in outputs], axis=0)
-
-        results = {**{"val_loss": val_loss_mean}, **{"perplexity": exp(val_loss_mean)}}  # , **compute_metrics(preds, out_label_ids)}
+        results = {**{"val_loss": val_loss_mean},  **{"perplexity": torch.exp(torch.tensor(val_loss_mean)).detach().cpu()}}
 
         ret = {k: v for k, v in results.items()}
         ret["log"] = results
@@ -141,13 +258,19 @@ class Mlm(BaseTransformer):
     def validation_epoch_end(self, outputs: dict) -> dict:
         ret = self._eval_end(outputs)
         logs = ret["log"]
-        return {"avg_val_loss": logs["val_loss"], "avg_perplexity": logs["perplexity"], "log": logs, "progress_bar": logs}
+
+        self.log("avg_val_loss", logs["val_loss"], on_step=False)
+        self.log("perplexity", logs["perplexity"], on_step=False)
+        # return {"avg_val_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
 
     def test_epoch_end(self, outputs: dict) -> dict:
         ret = self._eval_end(outputs)
         logs = ret["log"]
+
+        self.log("avg_val_loss", logs["val_loss"], on_step=False)
+        self.log("perplexity", logs["perplexity"], on_step=False)
         # `val_loss` is the key returned by `self._eval_end()` but actually refers to `test_loss`
-        return {"avg_test_loss": logs["val_loss"], "avg_perplexity": logs["perplexity"], "log": logs, "progress_bar": logs}
+        # return {"avg_test_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
 
     @staticmethod
     def add_model_specific_args(parser, root_dir):
@@ -160,37 +283,16 @@ class Mlm(BaseTransformer):
             help="Set the filler case for this analysis - 'distinct', 'unique', 'none'.",
         )
         parser.add_argument(
-            "--use_mlm",
-            action="store_true",
-            help="The trained MLM model ('fine-tuned') is loaded instead of the trained pretrained BERT model ('not fine-tuned')"
-        )
+            "--block_size",
+            default=512,
+            type=int,
+            help="The number of tokens to trained on during a single forward pass",
+        ) 
         parser.add_argument(
             "--task",
             default="sts-b",
             type=str,
             help="The GLUE task to run",
-        )
-        parser.add_argument(
-            "--gpus",
-            default=0,
-            type=int,
-            help="The number of GPUs allocated for this, it is by default 0 meaning none",
-        )
-        parser.add_argument(
-            "--overwrite_cache",
-            action="store_true",
-            help="Overwrite the cached training and evaluation sets"
-        )
-        parser.add_argument(
-            "--check_val_every_n_epoch",
-            default=1,
-            type=int,
-            help="Evaluate the model every n training epochs."
-        )
-        parser.add_argument(
-            "--fast_dev_run",
-            action='store_true',
-            help="Runs 1 batch of train, test and val to find any bugs."
         )
 
         return parser
@@ -223,8 +325,10 @@ class Prediction(BaseTransformer):
         loss = outputs[0]
 
         lr_scheduler = self.trainer.lr_schedulers[0]["scheduler"]
-        tensorboard_logs = {"loss": loss, "rate": lr_scheduler.get_last_lr()[-1]}
-        return {"loss": loss, "log": tensorboard_logs}
+        # tensorboard_logs = {"loss": loss, "rate": lr_scheduler.get_last_lr()[-1]}
+        self.log("loss", loss)
+        self.log("rate", lr_scheduler.get_last_lr()[-1])
+        return {"loss": loss, "rate": lr_scheduler.get_last_lr()[-1]}
 
     def prepare_data(self):
         "Called to initialize data. Use the call to construct features."
@@ -245,6 +349,7 @@ class Prediction(BaseTransformer):
     def get_dataloader(self, type_path: str, batch_size: int, shuffle: bool = False) -> DataLoader:
         "Load datasets. Called after prepare data."
         args = self.hparams
+
         cached_features_file = self._feature_file(type_path)
         logger.info("Loading features from cached file %s", cached_features_file)
         features = torch.load(cached_features_file)
@@ -252,25 +357,28 @@ class Prediction(BaseTransformer):
         all_attention_mask = torch.stack([f.attention_mask for f in features]).squeeze()
         all_labels = torch.stack([f.label_id for f in features]).squeeze()
 
-        return DataLoader(
-            TensorDataset(all_input_ids, all_attention_mask, all_labels),
-            batch_size=batch_size,
-            shuffle=shuffle,
-            num_workers=args.num_workers
+        return DataLoader(TensorDataset(all_input_ids, 
+                                        all_attention_mask, 
+                                        all_labels),
+                        batch_size=batch_size,
+                        shuffle=shuffle,
+                        num_workers=args.num_workers
         )
 
     def validation_step(self, batch, batch_idx):
         inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[2]}
 
         outputs = self(**inputs)
-        tmp_eval_loss, logits = outputs[:2]
+        loss, logits = outputs[:2]
         preds = logits.detach().cpu().numpy()
         out_label_ids = inputs["labels"].detach().cpu().numpy()
 
-        return {"val_loss": tmp_eval_loss.detach().cpu(), "pred": preds, "target": out_label_ids}
+        self.log("val_loss", loss)
+
+        return {"val_loss": loss, "pred": preds, "target": out_label_ids}
 
     def _eval_end(self, outputs: dict) -> tuple:
-        val_loss_mean = torch.stack([x["val_loss"] for x in outputs]).mean().detach().cpu().item()
+        val_loss_mean = torch.stack([x["val_loss"] for x in outputs]).mean().detach().cpu()
         preds = np.concatenate([x["pred"] for x in outputs], axis=0)
 
         if self.hparams.glue_output_mode == "classification":
@@ -289,13 +397,19 @@ class Prediction(BaseTransformer):
     def validation_epoch_end(self, outputs: dict) -> dict:
         ret = self._eval_end(outputs)
         logs = ret["log"]
-        return {"avg_val_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
+
+        self.log("avg_val_loss", logs["val_loss"], on_step=False)
+        self.log("mse", logs["mse"], on_step=False)
+        # return {"avg_val_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
 
     def test_epoch_end(self, outputs: dict) -> dict:
         ret = self._eval_end(outputs)
         logs = ret["log"]
+
+        self.log("avg_val_loss", logs["val_loss"], on_step=False)
+        self.log("mse", logs["mse"], on_step=False)
         # `val_loss` is the key returned by `self._eval_end()` but actually refers to `test_loss`
-        return {"avg_test_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
+        # return {"avg_test_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
 
     @staticmethod
     def add_model_specific_args(parser, root_dir):
@@ -312,28 +426,6 @@ class Prediction(BaseTransformer):
             default="sts-b",
             type=str,
             help="The GLUE task to run",
-        )
-        parser.add_argument(
-            "--gpus",
-            default=0,
-            type=int,
-            help="The number of GPUs allocated for this, it is by default 0 meaning none",
-        )
-        parser.add_argument(
-            "--overwrite_cache",
-            action="store_true",
-            help="Overwrite the cached training and evaluation sets"
-        )
-        parser.add_argument(
-            "--check_val_every_n_epoch",
-            default=1,
-            type=int,
-            help="Evaluate the model every n training epochs."
-        )
-        parser.add_argument(
-            "--fast_dev_run",
-            action='store_true',
-            help="Runs 1 batch of train, test and val to find any bugs."
         )
 
         return parser
@@ -387,13 +479,15 @@ class PredictionFT(BaseTransformer):
         loss = outputs[0]
 
         lr_scheduler = self.trainer.lr_schedulers[0]["scheduler"]
-        tensorboard_logs = {"loss": loss, "rate": lr_scheduler.get_last_lr()[-1]}
-        return {"loss": loss, "log": tensorboard_logs}
+        # tensorboard_logs = {"loss": loss, "rate": lr_scheduler.get_last_lr()[-1]}
+        self.log("loss", loss.detach().cpu().item())
+        self.log("rate", lr_scheduler.get_last_lr()[-1])
+        return {"loss": loss.detach().cpu(), "rate": lr_scheduler.get_last_lr()[-1]}
 
     def prepare_data(self):
         "Called to initialize data. Use the call to construct features."
         args = self.hparams
-
+        
         for type_path in ["dev", "test"]:
             data = load_tsv(args.filler_case, args.data_dir, type_path)
             max_len = max_length(data, self.tokenizer)
@@ -411,28 +505,16 @@ class PredictionFT(BaseTransformer):
         args = self.hparams
 
         if type_path == "train":
-            dataset = load_and_cache_examples_lm(args.filler_case,
-                                            args.data_dir,
-                                            args,
-                                            self.tokenizer)
-            loader = DataLoader(dataset=dataset,
-                                            batch_size=batch_size,
-                                            collate_fn=self.collator_fn,
-                                            shuffle=shuffle,
-                                            num_workers=args.num_workers
+            dataset = load_and_cache_examples_lm(args,
+                                                self.tokenizer
+            )
+            loader = DataLoader(dataset,
+                                batch_size=batch_size,
+                                collate_fn=self.collator_fn,
+                                shuffle=shuffle,
+                                num_workers=args.num_workers
             )
         if type_path in ["dev", "test"]:
-            # dataset = load_and_cache_examples_lm(args.filler_case,
-            #                                 args.data_dir,
-            #                                 args,
-            #                                 self.tokenizer,
-            #                                 evaluate=True)
-            # loader = torch.utils.data.DataLoader(dataset=dataset,
-            #                                 batch_size=batch_size,
-            #                                 collate_fn=self.collator_fn,
-            #                                 shuffle=shuffle,
-            #                                 num_workers=args.num_workers
-            # )
             cached_features_file = self._feature_file(type_path)
             logger.info("Loading features from cached file %s", cached_features_file)
             features = torch.load(cached_features_file)
@@ -451,6 +533,7 @@ class PredictionFT(BaseTransformer):
 
     def validation_step(self, batch, batch_idx):
         inputs = {"input_ids": batch[0], "attention_mask": batch[1]}
+        
         outputs = self(**inputs)
 
         pooled_output = outputs[1]
@@ -463,11 +546,12 @@ class PredictionFT(BaseTransformer):
         loss_fct = MSELoss()
         loss = loss_fct(logits.view(-1), labels.view(-1))
 
-        tmp_eval_loss = outputs[0]  # actually mask_lm_loss
         preds = logits.detach().cpu().numpy()
         out_label_ids = labels.detach().cpu().numpy()
 
-        return {"val_loss": tmp_eval_loss.detach().cpu(), "pred": preds, "target": out_label_ids}
+        self.log("val_loss", loss.detach().cpu().item())
+
+        return {"val_loss": loss.detach().cpu(), "pred": preds, "target": out_label_ids}
 
     def _eval_end(self, outputs: dict) -> tuple:
         val_loss_mean = torch.stack([x["val_loss"] for x in outputs]).mean().detach().cpu().item()
@@ -480,7 +564,7 @@ class PredictionFT(BaseTransformer):
 
         out_label_ids = np.concatenate([x["target"] for x in outputs], axis=0)
 
-        results = {**{"val_loss": val_loss_mean}, **{"perplexity": torch.exp(torch.tensor(val_loss_mean))}, **compute_metrics(preds, out_label_ids)}
+        results = {**{"val_loss": val_loss_mean}, **{"perplexity": torch.exp(torch.tensor(val_loss_mean)).detach().cpu().item()}, **compute_metrics(preds, out_label_ids)}
 
         ret = {k: v for k, v in results.items()}
         ret["log"] = results
@@ -489,14 +573,22 @@ class PredictionFT(BaseTransformer):
     def validation_epoch_end(self, outputs: dict) -> dict:
         ret = self._eval_end(outputs)
         logs = ret["log"]
-        # actually mask_lm_loss
-        return {"avg_val_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
+
+        self.log("avg_val_loss", logs["val_loss"], on_step=False)
+        self.log("perplexity", logs["perplexity"], on_step=False)
+        self.log("mse", logs["mse"], on_step=False)
+        # return {"avg_val_loss": logs["val_loss"], "progress_bar": logs}
 
     def test_epoch_end(self, outputs: dict) -> dict:
         ret = self._eval_end(outputs)
         logs = ret["log"]
+
+        self.log("avg_val_loss", logs["val_loss"], on_step=False)
+        self.log("perplexity", logs["perplexity"], on_step=False)
+        self.log("mse", logs["mse"], on_step=False)        
         # `val_loss` is the key returned by `self._eval_end()` but actually refers to `mask_lm_loss`
-        return {"avg_test_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
+        # return {"avg_test_loss": logs["val_loss"], "progress_bar": logs}
+
 
     @staticmethod
     def add_model_specific_args(parser, root_dir):
@@ -513,39 +605,12 @@ class PredictionFT(BaseTransformer):
             default=512,
             type=int,
             help="The number of tokens to trained on during a single forward pass",
-        )
-        # parser.add_argument(
-        #     "--use_mlm",
-        #     action="store_true",
-        #     help="The trained MLM model ('fine-tuned') is loaded instead of the trained pretrained BERT model ('not fine-tuned')"
-        # )
+        ) 
         parser.add_argument(
             "--task",
             default="sts-b",
             type=str,
             help="The GLUE task to run",
-        )
-        parser.add_argument(
-            "--gpus",
-            default=0,
-            type=int,
-            help="The number of GPUs allocated for this, it is by default 0 meaning none",
-        )
-        parser.add_argument(
-            "--overwrite_cache",
-            action="store_true",
-            help="Overwrite the cached training and evaluation sets"
-        )
-        parser.add_argument(
-            "--check_val_every_n_epoch",
-            default=1,
-            type=int,
-            help="Evaluate the model every n training epochs."
-        )
-        parser.add_argument(
-            "--fast_dev_run",
-            action='store_true',
-            help="Runs 1 batch of train, test and val to find any bugs."
         )
 
         return parser
