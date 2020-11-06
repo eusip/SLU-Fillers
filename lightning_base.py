@@ -19,6 +19,7 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
+    AutoModelForCausalLM,
     AutoModelForMaskedLM,
     AutoTokenizer,
     PretrainedConfig,
@@ -42,7 +43,8 @@ MODEL_MODES = {
     "question-answering": AutoModelForQuestionAnswering,
     "pretraining": AutoModelForPreTraining,
     "token-classification": AutoModelForTokenClassification,
-    "language-modeling": AutoModelForMaskedLM,
+    "language-modeling": AutoModelForCausalLM,
+    "masked-language-modeling": AutoModelForMaskedLM,
     "summarization": AutoModelForSeq2SeqLM,
     "translation": AutoModelForSeq2SeqLM,
 }
@@ -189,7 +191,7 @@ class BaseTransformer(pl.LightningModule):
         #     elif stage == "test":
         #         self.val_loader = self.get_dataloader("dev", self.hparams.train_batch_size, shuffle=False)
 
-        # self.prepare_data() # should automatically be called by trainer prior to setup
+        self.prepare_data() # should automatically be called by trainer prior to setup
         self.train_loader = self.get_dataloader("train", self.hparams.train_batch_size, shuffle=True)
         if stage == "fit":
             self.val_loader = self.get_dataloader("dev", self.hparams.eval_batch_size, shuffle=False)
@@ -247,7 +249,7 @@ class BaseTransformer(pl.LightningModule):
         )
         parser.add_argument(
             "--cache_dir",
-            default="",
+            default="./.cache",
             type=str,
             help="Where do you want to store the pre-trained models downloaded from s3",
         )
@@ -502,13 +504,13 @@ def generic_train(
 
     # add custom checkpoints
     if args.do_perplexity and args.use_mlm: 
-        filepath = os.path.join(args.output_dir, "checkpoints", "perplexity_ft")
+        filepath = os.path.join(args.output_dir, "checkpoints/perplexity_ft")
     elif args.do_perplexity and not args.use_mlm:
-        filepath = os.path.join(args.output_dir, "checkpoints", "perplexity")
+        filepath = os.path.join(args.output_dir, "checkpoints/perplexity")
     elif args.do_predict_confidence and args.use_mlm:
-        filepath = os.path.join(args.output_dir, "checkpoints", "prediction_ft")
+        filepath = os.path.join(args.output_dir, "checkpoints/prediction_ft")
     elif args.do_predict_confidence and not args.use_mlm:
-        filepath = os.path.join(args.output_dir, "checkpoints", "prediction")
+        filepath = os.path.join(args.output_dir, "checkpoints/prediction")
 
     if checkpoint_callback is None:
         checkpoint_callback = pl.callbacks.ModelCheckpoint(

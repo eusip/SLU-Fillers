@@ -30,6 +30,7 @@ from models import (BertLM,
 )
 
 def main():
+    # init generic args
     generic_parser = argparse.ArgumentParser(add_help=False)
     add_generic_args(generic_parser, os.getcwd())
     generic_args = generic_parser.parse_known_args()[0]
