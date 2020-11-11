@@ -34,7 +34,7 @@ cd SLU-Fillers
 pip install -e .   
 pip install -r requirements.txt
  ```   
- Next, excute main.py in order to replicate any of 4 experiments.   
+ Next, excute main.py in order to replicate any of the 4 experiments.   
  ```bash
 # Perplexity experiment (Left-to-right Language Model)
 python main.py --filler_case no_filler --do_train --do_perplexity
