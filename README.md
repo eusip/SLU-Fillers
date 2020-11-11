@@ -2,7 +2,7 @@
  
 # The importance of fillers for text representations of speech transcripts.
 
-[![Paper](http://img.shields.io/badge/paper-arxiv.2009.11340-B31B1B.svg)](https://www.nature.com/articles/nature14539)
+[![Paper](http://img.shields.io/badge/paper-arxiv.2009.11340-B31B1B.svg)](https://arxiv.org/abs/2009.11340)
 [![Conference](http://img.shields.io/badge/EMNLP-2020-4b44ce.svg)](https://2020.emnlp.org/schedule#s1024)
 <!--
 [![Conference](http://img.shields.io/badge/ICLR-2019-4b44ce.svg)](https://papers.nips.cc/book/advances-in-neural-information-processing-systems-31-2018)
