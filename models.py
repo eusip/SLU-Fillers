@@ -12,27 +12,30 @@ import torch
 from torch.nn import Dropout, Linear, MSELoss
 from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
-from transformers import (AutoTokenizer,
-                        AutoConfig, 
-                        AutoModelForSequenceClassification,
-                        DataCollatorForLanguageModeling
+from transformers import (
+    AutoTokenizer,
+    AutoConfig, 
+    AutoModelForSequenceClassification,
+    DataCollatorForLanguageModeling
 )
 from transformers.modeling_bert import BertPooler, BertLMHeadModel
 from transformers.modeling_outputs import SequenceClassifierOutput
 from transformers import glue_output_modes
 from transformers import glue_tasks_num_labels
 
+from lightning_base import BaseTransformer, add_generic_args, generic_train
 from utils import (
     load_tsv,
     max_length,
-    load_and_cache_examples_lm,
+    load_and_cache_examples,
     convert_examples_to_features,
     compute_metrics,
     BertForMaskedLM
 )
-from lightning_base import BaseTransformer, add_generic_args, generic_train
+
 
 logger = logging.getLogger(__name__)
+
 
 class BertLM(BaseTransformer):
     """An instance of the `BertLMHeadModel` model."""
@@ -40,11 +43,17 @@ class BertLM(BaseTransformer):
     mode = "language-modeling"
 
     def __init__(self, hparams):
+        """
+        See 
+        https://huggingface.co/transformers/master/_modules/transformers/data/processors/glue.html
+        for a reference to the possible GLUE output modes and task number labels.
+        """
         if type(hparams) == dict:
             hparams = Namespace(**hparams)
         hparams.glue_output_mode = glue_output_modes[hparams.task]
         num_labels = glue_tasks_num_labels[hparams.task]
 
+        # initialize the HF configuration class
         config = AutoConfig.from_pretrained(
                     hparams.config_name,
                     cache_dir=hparams.cache_dir if hparams.cache_dir else None,
@@ -52,33 +61,44 @@ class BertLM(BaseTransformer):
         )
 
         super().__init__(hparams, num_labels, self.mode, config=config)
+        # initialize the collator function used by the dataloader for processing a batch of data 
+        # on-the-fly
         self.data_collator = DataCollatorForLanguageModeling(
                                                             tokenizer=self.tokenizer,
-                                                            mlm=True,
-                                                            mlm_probability=0.15
+                                                            mlm=False,
         )
         self.collator_fn = self.data_collator._tensorize_batch
         
     def forward(self, **inputs):
+        """The forward pass of the model."""
         return self.model(**inputs)
 
     @property
     def total_steps(self) -> int:
         return super().total_steps
 
+    def prepare_data(self):
+        pass
+
     def training_step(self, batch, batch_idx):
+        """The training step of the training loop."""
+        # `labels` is a copy of the current batch of examples
         labels = batch.clone().detach()
+        # set any padding tokens values in the batch to -100
         if self.tokenizer.pad_token_id is not None:
            labels[labels == self.tokenizer.pad_token_id] = -100
         inputs = {"input_ids": batch, "labels": labels}
 
+        # self is the forward pass
         outputs = self(**inputs)
         loss = outputs[0]
         
         lr_scheduler = self.trainer.lr_schedulers[0]["scheduler"]
-        # tensorboard_logs = {"loss": loss, "rate": lr_scheduler.get_last_lr()[-1]}
+        
+        # log metrics
         self.log("loss", loss)
         self.log("rate", lr_scheduler.get_last_lr()[-1])
+        
         return {"loss": loss}
 
     def get_dataloader(self, type_path: str, batch_size: int, shuffle: bool = False) -> DataLoader:
@@ -86,11 +106,11 @@ class BertLM(BaseTransformer):
         args = self.hparams
 
         if type_path == "train":
-            dataset = load_and_cache_examples_lm(args,
+            dataset = load_and_cache_examples(args,
                                                 self.tokenizer
             )
         if type_path == "dev":
-            dataset = load_and_cache_examples_lm(args,
+            dataset = load_and_cache_examples(args,
                                                 self.tokenizer,
                                                 evaluate=True
             )
@@ -104,19 +124,26 @@ class BertLM(BaseTransformer):
         return loader
         
     def validation_step(self, batch, batch_idx):
+        """The validation step of the training loop. Evaluation is done during training at the end 
+        of each epoch."""
+        # `labels` is a copy of the current batch of examples
         labels = batch.clone().detach()
+        # set any padding tokens values in the batch to -100
         if self.tokenizer.pad_token_id is not None:
             labels[labels == self.tokenizer.pad_token_id] = -100
         inputs = {"input_ids": batch, "labels": labels}
 
+        # self is the forward pass
         outputs = self(**inputs)
         loss = outputs[0]
         
+        # log metrics
         self.log("val_loss", loss)
 
         return {"val_loss": loss}
 
     def _eval_end(self, outputs: dict) -> tuple:
+        # the mean validation loss for all the examples in the batch.
         val_loss_mean = torch.stack([x["val_loss"] for x in outputs]).mean().detach().cpu()
 
         results = {**{"val_loss": val_loss_mean},  **{"perplexity": torch.exp(val_loss_mean.clone().detach()).detach().cpu()}}
@@ -126,29 +153,31 @@ class BertLM(BaseTransformer):
         return ret
 
     def validation_epoch_end(self, outputs: dict) -> dict:
+        """These computations are made at the end of a validation step which occurs at the end of 
+        an epoch."""
         ret = self._eval_end(outputs)
         logs = ret["log"]
 
+        # log metrics
         self.log("avg_val_loss", logs["val_loss"], on_step=False)
         self.log("perplexity", logs["perplexity"], on_step=False)
-        # return {"avg_val_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
 
     def test_epoch_end(self, outputs: dict) -> dict:
+        """These computations are made at the end of a test epoch."""
         ret = self._eval_end(outputs)
         logs = ret["log"]
 
-        self.log("avg_val_loss", logs["val_loss"], on_step=False)
-        self.log("perplexity", logs["perplexity"], on_step=False)
+        # log metrics
         # `val_loss` is the key returned by `self._eval_end()` but actually refers to `test_loss`
-        # return {"avg_test_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
+        self.log("avg_test_loss", logs["val_loss"], on_step=False)
+        self.log("perplexity", logs["perplexity"], on_step=False)
 
     @staticmethod
     def add_model_specific_args(parser, root_dir):
         BaseTransformer.add_model_specific_args(parser, root_dir)
-
         parser.add_argument(
             "--filler_case",
-            default="no_filler",
+            default="none",
             type=str,
             help="Set the filler case for this analysis - 'distinct', 'unique', 'none'.",
         )
@@ -156,7 +185,7 @@ class BertLM(BaseTransformer):
             "--block_size",
             default=512,
             type=int,
-            help="The number of tokens to trained on during a single forward pass",
+            help="The number of tokens to trained on during a forward pass.",
         ) 
         parser.add_argument(
             "--task",
@@ -174,11 +203,17 @@ class Mlm(BaseTransformer):
     mode = "masked-language-modeling"
 
     def __init__(self, hparams):
+        """
+        See 
+        https://huggingface.co/transformers/master/_modules/transformers/data/processors/glue.html
+        for a reference to the possible GLUE output modes and task number labels.
+        """
         if type(hparams) == dict:
             hparams = Namespace(**hparams)
         hparams.glue_output_mode = glue_output_modes[hparams.task]
         num_labels = glue_tasks_num_labels[hparams.task]
 
+        # initialize the HF configuration class
         config = AutoConfig.from_pretrained(
                     hparams.config_name,
                     cache_dir=hparams.cache_dir if hparams.cache_dir else None,
@@ -186,6 +221,8 @@ class Mlm(BaseTransformer):
         )
 
         super().__init__(hparams, num_labels, self.mode, config=config)
+        # initialize the collator function used by the dataloader for processing a batch of data 
+        # on-the-fly
         self.data_collator = DataCollatorForLanguageModeling(
                                                             tokenizer=self.tokenizer,
                                                             mlm=True,
@@ -195,23 +232,33 @@ class Mlm(BaseTransformer):
         self.mask_tokens = self.data_collator.mask_tokens
 
     def forward(self, **inputs):
+        """The forward pass of the model."""
         return self.model(**inputs)
 
     @property
     def total_steps(self) -> int:
         return super().total_steps
 
+    def prepare_data(self):
+        pass
+
     def training_step(self, batch, batch_idx):
+        """The training step of the training loop."""
+        # self.mask_tokens takes a batch of examples and returns masked inputs 
+        # and labels 
         inputs, labels = self.mask_tokens(batch)
         inputs = {"input_ids": inputs, "labels": labels}
 
+        # self is the forward pass
         outputs = self(**inputs)
         loss = outputs[0]
 
         lr_scheduler = self.trainer.lr_schedulers[0]["scheduler"]
-        # tensorboard_logs = {"loss": loss, "rate": lr_scheduler.get_last_lr()[-1]}  # "perplexity": perplexity,
+
+        # log metrics
         self.log("loss", loss)
         self.log("rate", lr_scheduler.get_last_lr()[-1])
+
         return {"loss": loss}
 
     def get_dataloader(self, type_path: str, batch_size: int, shuffle: bool = False) -> DataLoader:
@@ -219,11 +266,11 @@ class Mlm(BaseTransformer):
         args = self.hparams
 
         if type_path == "train":
-            dataset = load_and_cache_examples_lm(args,
+            dataset = load_and_cache_examples(args,
                                                 self.tokenizer
             )
         if type_path == "dev":
-            dataset = load_and_cache_examples_lm(args,
+            dataset = load_and_cache_examples(args,
                                                 self.tokenizer,
                                                 evaluate=True
             )
@@ -238,17 +285,24 @@ class Mlm(BaseTransformer):
 
 
     def validation_step(self, batch, batch_idx):
+        """The validation step of the training loop. Evaluation is done during training at the end 
+        of each epoch."""
+        # self.mask_tokens takes a batch of examples and returns masked inputs 
+        # and labels 
         inputs, labels = self.mask_tokens(batch)
         inputs = {"input_ids": inputs, "labels": labels}
 
+        # self is the forward pass
         outputs = self(**inputs)
         loss = outputs[0]
         
+        # log metrics
         self.log("val_loss", loss)
 
         return {"val_loss": loss}
 
     def _eval_end(self, outputs: dict) -> tuple:
+        # the mean validation loss for all the examples in the batch.
         val_loss_mean = torch.stack([x["val_loss"] for x in outputs]).mean().detach().cpu()
 
         results = {**{"val_loss": val_loss_mean},  **{"perplexity": torch.exp(val_loss_mean.clone().detach()).detach().cpu()}}
@@ -258,29 +312,31 @@ class Mlm(BaseTransformer):
         return ret
 
     def validation_epoch_end(self, outputs: dict) -> dict:
+        """These computations are made at the end of a validation step which occurs at the end of 
+        an epoch."""
         ret = self._eval_end(outputs)
         logs = ret["log"]
 
+        # log metrics
         self.log("avg_val_loss", logs["val_loss"], on_step=False)
         self.log("perplexity", logs["perplexity"], on_step=False)
-        # return {"avg_val_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
 
     def test_epoch_end(self, outputs: dict) -> dict:
+        """These computations are made at the end of a test epoch."""
         ret = self._eval_end(outputs)
         logs = ret["log"]
 
+        # log metrics
+        # `val_loss` is the key returned by `self._eval_end()` but actually refers to `test_loss`
         self.log("avg_val_loss", logs["val_loss"], on_step=False)
         self.log("perplexity", logs["perplexity"], on_step=False)
-        # `val_loss` is the key returned by `self._eval_end()` but actually refers to `test_loss`
-        # return {"avg_test_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
 
     @staticmethod
     def add_model_specific_args(parser, root_dir):
         BaseTransformer.add_model_specific_args(parser, root_dir)
-
         parser.add_argument(
             "--filler_case",
-            default="no_filler",
+            default="none",
             type=str,
             help="Set the filler case for this analysis - 'distinct', 'unique', 'none'.",
         )
@@ -306,6 +362,11 @@ class Prediction(BaseTransformer):
     mode = "sequence-classification"
 
     def __init__(self, hparams):
+        """
+        See 
+        https://huggingface.co/transformers/master/_modules/transformers/data/processors/glue.html
+        for a reference to the possible GLUE output modes and task number labels.
+        """
         if type(hparams) == dict:
             hparams = Namespace(**hparams)
         hparams.glue_output_mode = glue_output_modes[hparams.task]
@@ -314,6 +375,7 @@ class Prediction(BaseTransformer):
         super().__init__(hparams, num_labels, self.mode)
 
     def forward(self, **inputs):
+        """The forward pass of the model."""
         return self.model(**inputs)
 
     @property
@@ -321,19 +383,23 @@ class Prediction(BaseTransformer):
         return super().total_steps
 
     def training_step(self, batch, batch_idx):
+        """The training step of the training loop."""
         inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[2]}
 
+        # self is the forward pass
         outputs = self(**inputs)
         loss = outputs[0]
 
         lr_scheduler = self.trainer.lr_schedulers[0]["scheduler"]
-        # tensorboard_logs = {"loss": loss, "rate": lr_scheduler.get_last_lr()[-1]}
+
+        # log metrics
         self.log("loss", loss)
         self.log("rate", lr_scheduler.get_last_lr()[-1])
+
         return {"loss": loss}
 
     def prepare_data(self):
-        "Called to initialize data. Use the call to construct features."
+        """Preprocessing and caching of dataset."""
         args = self.hparams
 
         for type_path in ["train", "dev", "test"]:
@@ -349,7 +415,7 @@ class Prediction(BaseTransformer):
                 torch.save(features, cached_features_file)
 
     def get_dataloader(self, type_path: str, batch_size: int, shuffle: bool = False) -> DataLoader:
-        "Load datasets. Called after prepare data."
+        """Load datasets. Called after prepare data."""
         args = self.hparams
 
         cached_features_file = self._feature_file(type_path)
@@ -368,18 +434,23 @@ class Prediction(BaseTransformer):
         )
 
     def validation_step(self, batch, batch_idx):
+        """The validation step of the training loop. Evaluation is done during training at the end 
+        of each epoch."""
         inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[2]}
 
+        # self is the forward pass
         outputs = self(**inputs)
         loss, logits = outputs[:2]
         preds = logits.detach().cpu().numpy()
         out_label_ids = inputs["labels"].detach().cpu().numpy()
 
+        # log metrics
         self.log("val_loss", loss)
 
         return {"val_loss": loss, "pred": preds, "target": out_label_ids}
 
     def _eval_end(self, outputs: dict) -> tuple:
+        # the mean validation loss for all the examples in the batch.
         val_loss_mean = torch.stack([x["val_loss"] for x in outputs]).mean().detach().cpu()
         preds = np.concatenate([x["pred"] for x in outputs], axis=0)
 
@@ -397,29 +468,31 @@ class Prediction(BaseTransformer):
         return ret
 
     def validation_epoch_end(self, outputs: dict) -> dict:
+        """These computations are made at the end of a validation step which occurs at the end of 
+        an epoch."""
         ret = self._eval_end(outputs)
         logs = ret["log"]
 
+         # log metrics
         self.log("avg_val_loss", logs["val_loss"], on_step=False)
         self.log("mse", logs["mse"], on_step=False)
-        # return {"avg_val_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
 
     def test_epoch_end(self, outputs: dict) -> dict:
+        """These computations are made at the end of a test epoch."""
         ret = self._eval_end(outputs)
         logs = ret["log"]
 
+        # log metrics
+        # `val_loss` is the key returned by `self._eval_end()` but actually refers to `test_loss`
         self.log("avg_val_loss", logs["val_loss"], on_step=False)
         self.log("mse", logs["mse"], on_step=False)
-        # `val_loss` is the key returned by `self._eval_end()` but actually refers to `test_loss`
-        # return {"avg_test_loss": logs["val_loss"], "log": logs, "progress_bar": logs}
 
     @staticmethod
     def add_model_specific_args(parser, root_dir):
         BaseTransformer.add_model_specific_args(parser, root_dir)
-
         parser.add_argument(
             "--filler_case",
-            default="no_filler",
+            default="none",
             type=str,
             help="Set the filler case for this analysis - 'distinct', 'unique', 'none'.",
         )
@@ -439,6 +512,11 @@ class PredictionFT(BaseTransformer):
     mode = "sequence-classification"
 
     def __init__(self, hparams):
+        """
+        See 
+        https://huggingface.co/transformers/master/_modules/transformers/data/processors/glue.html
+        for a reference to the possible GLUE output modes and task number labels.
+        """
         if type(hparams) == dict:
             hparams = Namespace(**hparams)
         hparams.glue_output_mode = glue_output_modes[hparams.task]
@@ -446,57 +524,46 @@ class PredictionFT(BaseTransformer):
         
         output_dir = Path(hparams.output_dir)
 
+        # initialize the HF configuration class
         config = AutoConfig.from_pretrained(
                 hparams.config_name,
                 **({"num_labels": num_labels}),
                 cache_dir=hparams.cache_dir if hparams.cache_dir else None,
-        ) 
-
-        # self.tokenizer = AutoTokenizer.from_pretrained(
-        #         output_dir.joinpath("best_tfmr"),
-        # )
-
-        # approach 1 - load model from TF checkpoint
-        model = AutoModelForSequenceClassification.from_pretrained(output_dir.joinpath("best_tfmr"),
-                        config=config,
         )
+
+        # approch load HF `pretrained` save of the MLM
+        model = AutoModelForSequenceClassification.from_pretrained(hparams.mlm_path, config=config)
         
         super().__init__(hparams, num_labels, self.mode, config=config, model=model)
-        # approach 2 - load model from explicit save of PyTorch model
-        # bert_path = self.output_dir.joinpath("best_tfmr")    
-        # self.bert = torch.load(bert_path)
 
     def forward(self, **inputs):
+        """The forward pass of the model."""
         return self.model(**inputs)
 
     @property
     def total_steps(self) -> int:
         return super().total_steps
 
+    def prepare_data(self):
+        raise NotImplementedError()
+
     def training_step(self, batch, batch_idx):
+        """The training step of the training loop."""
         inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[2]}
 
+        # self is the forward pass
         outputs = self(**inputs)
         loss = outputs[0]
 
         lr_scheduler = self.trainer.lr_schedulers[0]["scheduler"]
-        # tensorboard_logs = {"loss": loss, "rate": lr_scheduler.get_last_lr()[-1]}
+
+        # log metrics
         self.log("loss", loss)
         self.log("rate", lr_scheduler.get_last_lr()[-1])
         return {"loss": loss}
 
-    def _feature_file(self, type_path):
-        return os.path.join(
-            self.hparams.data_dir,
-            "cached_lm_{}_{}_{}".format(
-                type_path,
-                list(filter(None, self.hparams.model_name_or_path.split("/"))).pop(),
-                self.hparams.filler_case
-            ),
-        )
-
     def prepare_data(self):
-        "Called to initialize data. Use the call to construct features."
+        "Preprocessing and caching of dataset."
         args = self.hparams
         
         for type_path in ["train", "dev", "test"]:
@@ -528,18 +595,23 @@ class PredictionFT(BaseTransformer):
         )
 
     def validation_step(self, batch, batch_idx):
+        """The validation step of the training loop. Evaluation is done during training at the end 
+        of each epoch."""
         inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[2]}
 
+        # self is the forward pass
         outputs = self(**inputs)
         loss, logits = outputs[:2]
         preds = logits.detach().cpu().numpy()
         out_label_ids = inputs["labels"].detach().cpu().numpy()
 
+        # log metrics
         self.log("val_loss", loss)
 
         return {"val_loss": loss, "pred": preds, "target": out_label_ids}
 
     def _eval_end(self, outputs: dict) -> tuple:
+        # the mean validation loss for all the examples in the batch.
         val_loss_mean = torch.stack([x["val_loss"] for x in outputs]).mean().detach().cpu()
         preds = np.concatenate([x["pred"] for x in outputs], axis=0)
 
@@ -557,30 +629,30 @@ class PredictionFT(BaseTransformer):
         return ret
 
     def validation_epoch_end(self, outputs: dict) -> dict:
+        """These computations are made at the end of a validation step which occurs at the end of 
+        an epoch."""
         ret = self._eval_end(outputs)
         logs = ret["log"]
 
         self.log("avg_val_loss", logs["val_loss"], on_step=False)
         self.log("mse", logs["mse"], on_step=False)
-        # return {"avg_val_loss": logs["val_loss"], "progress_bar": logs}
 
     def test_epoch_end(self, outputs: dict) -> dict:
+        """These computations are made at the end of a test epoch."""
         ret = self._eval_end(outputs)
         logs = ret["log"]
 
+        # log metrics
+        # `val_loss` is the key returned by `self._eval_end()` but actually refers to `mask_lm_loss`
         self.log("avg_val_loss", logs["val_loss"], on_step=False)
         self.log("mse", logs["mse"], on_step=False)        
-        # `val_loss` is the key returned by `self._eval_end()` but actually refers to `mask_lm_loss`
-        # return {"avg_test_loss": logs["val_loss"], "progress_bar": logs}
-
 
     @staticmethod
     def add_model_specific_args(parser, root_dir):
         BaseTransformer.add_model_specific_args(parser, root_dir)
-
         parser.add_argument(
             "--filler_case",
-            default="no_filler",
+            default="none",
             type=str,
             help="Set the filler case for this analysis - 'distinct', 'unique', 'none'.",
         )
@@ -589,6 +661,12 @@ class PredictionFT(BaseTransformer):
             default="sts-b",
             type=str,
             help="The GLUE task to run",
+        )
+        parser.add_argument(
+            "--mlm_path",
+            default="./output/best_tfmr",
+            type=str,
+            help="Path to the HF `pretrained` save of the MLM",
         )
 
         return parser
