@@ -469,7 +469,6 @@ def generic_train(
 
     # set checkpoint paths
     filepath = os.path.join(cp_path, model_path)
-    print('filepath: ', filepath)
 
     if checkpoint_callback is None:
         checkpoint_callback = pl.callbacks.ModelCheckpoint(
