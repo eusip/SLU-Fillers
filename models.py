@@ -63,11 +63,14 @@ class BertLM(BaseTransformer):
         super().__init__(hparams, num_labels, self.mode, config=config)
         # initialize the collator function used by the dataloader for processing a batch of data 
         # on-the-fly
+        # mlm == False - labels are the same as the inputs with the padding tokens ignored 
+        # (by setting them to -100).
         self.data_collator = DataCollatorForLanguageModeling(
                                                             tokenizer=self.tokenizer,
                                                             mlm=False,
         )
         self.collator_fn = self.data_collator._tensorize_batch
+
         
     def forward(self, **inputs):
         """The forward pass of the model."""
@@ -106,19 +109,16 @@ class BertLM(BaseTransformer):
         args = self.hparams
 
         if type_path == "train":
-            dataset = load_and_cache_examples(args,
-                                                self.tokenizer
-            )
+            dataset = load_and_cache_examples(args, self.tokenizer)
         if type_path == "dev":
-            dataset = load_and_cache_examples(args,
-                                                self.tokenizer,
-                                                evaluate=True
-            )
-        loader = torch.utils.data.DataLoader(dataset=dataset,
+            dataset = load_and_cache_examples(args, self.tokenizer, evaluate=True)
+        loader = torch.utils.data.DataLoader(
+                                            dataset=dataset,
                                             batch_size=batch_size,
                                             collate_fn=self.collator_fn,
                                             shuffle=shuffle,
-                                            num_workers=args.num_workers
+                                            num_workers=args.num_workers,
+                                            pin_memory=(True if args.gpus else False),
         )
 
         return loader
@@ -146,7 +146,10 @@ class BertLM(BaseTransformer):
         # the mean validation loss for all the examples in the batch.
         val_loss_mean = torch.stack([x["val_loss"] for x in outputs]).mean().detach().cpu()
 
-        results = {**{"val_loss": val_loss_mean},  **{"perplexity": torch.exp(val_loss_mean.clone().detach()).detach().cpu()}}
+        results = {
+                    **{"val_loss": val_loss_mean},  
+                    **{"perplexity": torch.exp(val_loss_mean.clone().detach()).detach().cpu()}
+        }
 
         ret = {k: v for k, v in results.items()}
         ret["log"] = results
@@ -223,6 +226,7 @@ class Mlm(BaseTransformer):
         super().__init__(hparams, num_labels, self.mode, config=config)
         # initialize the collator function used by the dataloader for processing a batch of data 
         # on-the-fly
+        # mlm == True - labels are -100 for non-masked tokens and the value to predict for the masked token
         self.data_collator = DataCollatorForLanguageModeling(
                                                             tokenizer=self.tokenizer,
                                                             mlm=True,
@@ -230,6 +234,7 @@ class Mlm(BaseTransformer):
         )
         self.collator_fn = self.data_collator._tensorize_batch
         self.mask_tokens = self.data_collator.mask_tokens
+
 
     def forward(self, **inputs):
         """The forward pass of the model."""
@@ -266,23 +271,19 @@ class Mlm(BaseTransformer):
         args = self.hparams
 
         if type_path == "train":
-            dataset = load_and_cache_examples(args,
-                                                self.tokenizer
-            )
+            dataset = load_and_cache_examples(args, self.tokenizer)
         if type_path == "dev":
-            dataset = load_and_cache_examples(args,
-                                                self.tokenizer,
-                                                evaluate=True
-            )
-        loader = torch.utils.data.DataLoader(dataset=dataset,
+            dataset = load_and_cache_examples(args, self.tokenizer, evaluate=True)
+        loader = torch.utils.data.DataLoader(
+                                            dataset=dataset,
                                             batch_size=batch_size,
                                             collate_fn=self.collator_fn,
                                             shuffle=shuffle,
-                                            num_workers=args.num_workers
+                                            num_workers=args.num_workers,
+                                            pin_memory=(True if args.gpus else False),
         )
 
         return loader
-
 
     def validation_step(self, batch, batch_idx):
         """The validation step of the training loop. Evaluation is done during training at the end 
@@ -305,7 +306,10 @@ class Mlm(BaseTransformer):
         # the mean validation loss for all the examples in the batch.
         val_loss_mean = torch.stack([x["val_loss"] for x in outputs]).mean().detach().cpu()
 
-        results = {**{"val_loss": val_loss_mean},  **{"perplexity": torch.exp(val_loss_mean.clone().detach()).detach().cpu()}}
+        results = {
+                    **{"val_loss": val_loss_mean},  
+                    **{"perplexity": torch.exp(val_loss_mean.clone().detach()).detach().cpu()}
+        }
 
         ret = {k: v for k, v in results.items()}
         ret["log"] = results
@@ -425,12 +429,12 @@ class Prediction(BaseTransformer):
         all_attention_mask = torch.stack([f.attention_mask for f in features]).squeeze()
         all_labels = torch.stack([f.label_id for f in features]).squeeze()
 
-        return DataLoader(TensorDataset(all_input_ids, 
-                                        all_attention_mask, 
-                                        all_labels),
+        return DataLoader(
+                        TensorDataset(all_input_ids, all_attention_mask, all_labels),
                         batch_size=batch_size,
                         shuffle=shuffle,
-                        num_workers=args.num_workers
+                        num_workers=args.num_workers,
+                        pin_memory=(True if args.gpus else False),
         )
 
     def validation_step(self, batch, batch_idx):
@@ -461,7 +465,10 @@ class Prediction(BaseTransformer):
 
         out_label_ids = np.concatenate([x["target"] for x in outputs], axis=0)
 
-        results = {**{"val_loss": val_loss_mean}, **compute_metrics(preds, out_label_ids)}
+        results = {
+                    **{"val_loss": val_loss_mean}, 
+                    **compute_metrics(preds, out_label_ids)
+        }
 
         ret = {k: v for k, v in results.items()}
         ret["log"] = results
@@ -533,7 +540,7 @@ class PredictionFT(BaseTransformer):
 
         # approch load HF `pretrained` save of the MLM
         model = AutoModelForSequenceClassification.from_pretrained(hparams.mlm_path, config=config)
-        
+
         super().__init__(hparams, num_labels, self.mode, config=config, model=model)
 
     def forward(self, **inputs):
@@ -586,12 +593,12 @@ class PredictionFT(BaseTransformer):
         all_attention_mask = torch.stack([f.attention_mask for f in features]).squeeze()
         all_labels = torch.stack([f.label_id for f in features]).squeeze()
 
-        return DataLoader(TensorDataset(all_input_ids, 
-                                        all_attention_mask, 
-                                        all_labels),
+        return DataLoader(
+                        TensorDataset(all_input_ids, all_attention_mask, all_labels),
                         batch_size=batch_size,
                         shuffle=shuffle,
-                        num_workers=args.num_workers
+                        num_workers=args.num_workers,
+                        pin_memory=(True if args.gpus else False),
         )
 
     def validation_step(self, batch, batch_idx):
@@ -622,7 +629,10 @@ class PredictionFT(BaseTransformer):
 
         out_label_ids = np.concatenate([x["target"] for x in outputs], axis=0)
 
-        results = {**{"val_loss": val_loss_mean}, **compute_metrics(preds, out_label_ids)}
+        results = {
+                    **{"val_loss": val_loss_mean}, 
+                    **compute_metrics(preds, out_label_ids)
+        }
 
         ret = {k: v for k, v in results.items()}
         ret["log"] = results

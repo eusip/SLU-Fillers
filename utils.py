@@ -24,19 +24,19 @@ logger = logging.getLogger(__name__)
 
 
 CONFIDENCE_DATASETS = {"distinct": (
-                            "train_classif.tsv",
-                            "val_classif.tsv",
-                            "test_classif.tsv"
+                                    "train_classif.tsv",
+                                    "val_classif.tsv",
+                                    "test_classif.tsv"
                         ),
                         "unique": (
-                            "train_classif_unique.tsv",
-                            "val_classif_unique.tsv",
-                            "test_classif_unique.tsv"
+                                    "train_classif_unique.tsv",
+                                    "val_classif_unique.tsv",
+                                    "test_classif_unique.tsv"
                         ),
                         "none": (
-                            "train_classif_without_fillers.tsv",
-                            "val_classif_without_fillers.tsv",
-                            "test_classif_without_fillers.tsv"
+                                    "train_classif_without_fillers.tsv",
+                                    "val_classif_without_fillers.tsv",
+                                    "test_classif_without_fillers.tsv"
                         )
 }
 
@@ -55,10 +55,11 @@ def load_and_cache_examples(args, tokenizer, evaluate=False):
     else:
         file_path = os.path.join(args.data_dir, CONFIDENCE_DATASETS[args.filler_case][0])
 
-    dataset = TextDataset(tokenizer,
-                        file_path,
-                        block_size=args.block_size,
-                        overwrite_cache=args.overwrite_cache,
+    dataset = TextDataset(
+                            tokenizer,
+                            file_path,
+                            block_size=args.block_size,
+                            overwrite_cache=args.overwrite_cache,
     )
 
     return dataset
@@ -117,19 +118,24 @@ def convert_examples_to_features(data, tokenizer, max_length):
     examples = data.example.values
 
     for idx, example in enumerate(examples):
-        encoded_dict = tokenizer.encode_plus(example,
-                            add_special_tokens = True,
-                            truncation = True,
-                            padding = 'max_length',
-                            return_attention_mask = True,
-                            return_tensors = 'pt',
+        encoded_dict = tokenizer.encode_plus(
+                                                example,
+                                                add_special_tokens = True,
+                                                truncation = True,
+                                                padding = 'max_length',
+                                                return_attention_mask = True,
+                                                return_tensors = 'pt',
                         )
         input_ids.append(encoded_dict['input_ids'])
         attention_masks.append(encoded_dict['attention_mask'])
         labels.append(torch.tensor(data.label[idx], dtype=torch.float))
 
     for idx,_ in enumerate(input_ids):
-        features.append(InputFeatures(input_id=input_ids[idx].squeeze(), attention_mask=attention_masks[idx].squeeze(), label_id=labels[idx]))
+        features.append(InputFeatures(
+                                        input_id=input_ids[idx].squeeze(), 
+                                        attention_mask=attention_masks[idx].squeeze(), 
+                                        label_id=labels[idx])
+        )
 
     return features
 
@@ -168,7 +174,7 @@ class BertForMaskedLM(BertPreTrainedModel):
         if config.is_decoder:
             logger.warning(
                 "If you want to use `BertForMaskedLM` make sure `config.is_decoder=False` for "
-                "bi-directional self-a;;;;;;;;; ttention."
+                "bi-directional self-attention."
             )
 
         self.bert = BertModel(config)

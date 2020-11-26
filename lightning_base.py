@@ -38,7 +38,7 @@ from transformers.optimization import (
 # logger = logging.getLogger(__name__)
 
 
-# this dict provides the various HF transformer models that can be reference in this codebase
+# this dict provides the various HF transformer models that can be referenced in this codebase
 MODEL_MODES = {
     "base": AutoModel,
     "sequence-classification": AutoModelForSequenceClassification,
@@ -204,7 +204,11 @@ class BaseTransformer(pl.LightningModule):
         return self.test_loader
 
     def _feature_file(self, type_path):
-        """Returns the path to the cached dataset being referenced."""
+        """Returns the path to the cached dataset being referenced.
+        
+        Args:
+            type_path: The type of dataset being referenced - "train", "dev", or "test".
+        """
         return os.path.join(
             self.hparams.data_dir,
             "cached_{}_{}_{}".format(
@@ -331,8 +335,8 @@ class BaseTransformer(pl.LightningModule):
 
 
 class LoggingCallback(pl.Callback):
-    """This class provides hooks for logging values at the end of each batch, each validation and 
-    each test."""
+    """This class provides hooks for logging values at the end of each training batch, each 
+    validation loop, and each test ends."""
     def on_batch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         lr_scheduler = trainer.lr_schedulers[0]["scheduler"]
         lrs = {f"lr_group_{i}": lr for i, lr in enumerate(lr_scheduler.get_lr())}
@@ -443,14 +447,27 @@ def generic_train(
         model: BaseTransformer,
         args: argparse.Namespace,
         model_path: str,
-        early_stopping_callback=False,
         logger=None,
-        extra_callbacks=[],
+        logging_callback=LoggingCallback(),
         checkpoint_callback=None,
-        logging_callback=None,
+        early_stopping_callback=False,
+        extra_callbacks=[],     
     ):
-    """This function accepts a model and parsed arguments in order to configure the logging and 
-    checkpoint callbacks."""
+    """This function generates a PyTorch Lightning trainer object.
+    
+    Note: https://pytorch-lightning.readthedocs.io/en/stable/callbacks.html
+
+    Args:
+            model: A LightningModule consisting of the model and necessary functions
+            args: An argprse Namespace
+            model_path: A descriptive name of the model
+            logger: A logger for logging metrics captured by self.log()
+            logging_callback: A callback for logging metrics using the logger
+            checkpoint_callback: A callback for saving checkpoints based on a monitored metric
+            early_stopping_callback: A callback hook for monitoring a validation metric and stop 
+            training when it stops improving [optional]
+            extra_callbacks: Any extra callbacks desired          
+    """
     output_dir = Path(args.output_dir)
     logger_path = output_dir.joinpath("runs")
     cp_path = output_dir.joinpath("checkpoints")
@@ -472,16 +489,23 @@ def generic_train(
 
     if checkpoint_callback is None:
         checkpoint_callback = pl.callbacks.ModelCheckpoint(
-            filepath=filepath,
-            # filename=,
-            prefix="checkpoint",
-            monitor="val_loss",
-            mode="min",
-            save_top_k=1
+                                                            filepath=filepath,
+                                                            # filename=,
+                                                            prefix="checkpoint",
+                                                            monitor="val_loss",
+                                                            mode="min",
+                                                            save_top_k=1
         )
 
-    if logging_callback is None:
-        logging_callback = LoggingCallback()
+    if early_stopping_callback is True:
+        early_stopping_callback = pl.callbacks.EarlyStopping(
+                                                            monitor='val_loss',
+                                                            min_delta=0.00,
+                                                            patience=3,
+                                                            verbose=False,
+                                                            mode='max'
+        )
+        extra_callbacks.append(early_stopping_callback)
 
     train_params = {}
 
@@ -500,7 +524,7 @@ def generic_train(
     trainer = pl.Trainer.from_argparse_args(
         args,
         weights_summary=None,
-        # comment line below if no logging_callback
+        # comment any callbacks which have not been defined
         callbacks=[logging_callback] + extra_callbacks,
         logger=tb_logger,
         checkpoint_callback=checkpoint_callback,
