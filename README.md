@@ -29,10 +29,9 @@ First, install dependencies.
 # clone project
 git clone https://github.com/eusip/SLU-Fillers
 
-# install dependencies
+# create a conda environment from the export file
 cd SLU-Fillers
-pip install -e .
-pip install -r requirements.txt
+conda create -n myenv --file package-list.txt
  ```
 An overview of the primary arguments can be accessed using the `--help` option.
  ```
