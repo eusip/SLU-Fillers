@@ -235,7 +235,6 @@ class Mlm(BaseTransformer):
         self.collator_fn = self.data_collator._tensorize_batch
         self.mask_tokens = self.data_collator.mask_tokens
 
-
     def forward(self, **inputs):
         """The forward pass of the model."""
         return self.model(**inputs)
@@ -552,7 +551,7 @@ class PredictionFT(BaseTransformer):
         return super().total_steps
 
     def prepare_data(self):
-        raise NotImplementedError()
+        pass
 
     def training_step(self, batch, batch_idx):
         """The training step of the training loop."""

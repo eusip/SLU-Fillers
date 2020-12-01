@@ -87,8 +87,8 @@ def main():
         # checkpoints = list(sorted(glob.glob(os.path.join(args.output_dir, "checkpoints", 
         # model_path, "checkpointepoch=*.ckpt"), recursive=True))) 
         # model = model.load_from_checkpoint(checkpoints[-1])
-        model = model.load_from_checkpoint(os.path.join(args.output_dir, "checkpoints", model_path, 
-        ".ckpt"))
+        filename = " ".join("checkpoint-", model_path, ".ckpt")
+        model = model.load_from_checkpoint(os.path.join(args.output_dir, "checkpoints", filename))
         trainer.test(model)
 
 if __name__ == "__main__":

@@ -74,7 +74,7 @@ class BaseTransformer(pl.LightningModule):
         model=None,
         **config_kwargs
     ):
-        """Instantiate a model, tokenizer and config."""
+        """This is the base class of the PyTorch Lightning module. Instantiate a model, tokenizer and config."""
         super().__init__()
         self.save_hyperparameters(hparams)
         self.step_count = 0
@@ -331,12 +331,18 @@ class BaseTransformer(pl.LightningModule):
         parser.add_argument(
             "--adafactor",
             action="store_true",
+            help="Make use of the AdaFactor optimizer instead of the AdamW optimizer.",
+        )
+        parser.add_argument(
+            "--early_stopping",
+            action="store_true",
+            help="Implement early stopping of the training loop based on the validation loss metric.",
         )
 
 
 class LoggingCallback(pl.Callback):
     """This class provides hooks for logging values at the end of each training batch, each 
-    validation loop, and each test ends."""
+    validation loop, and each test end."""
     def on_batch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         lr_scheduler = trainer.lr_schedulers[0]["scheduler"]
         lrs = {f"lr_group_{i}": lr for i, lr in enumerate(lr_scheduler.get_lr())}
@@ -497,7 +503,7 @@ def generic_train(
                                                             save_top_k=1
         )
 
-    if early_stopping_callback is True:
+    if args.early_stopping is True:
         early_stopping_callback = pl.callbacks.EarlyStopping(
                                                             monitor='val_loss',
                                                             min_delta=0.00,
