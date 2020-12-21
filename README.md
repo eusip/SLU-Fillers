@@ -143,10 +143,10 @@ trainer.test(test_dataloaders=test)
 
 ### Citation
 ```
-@article{Ebenge Usip,
-  title={Research Engineer},
-  author={Affective Computing group, Institute Mines-Telecom, Telecom ParisTech},
-  journal={Saclay, France},
+@article{dinkar2020importance,
+  title={The importance of fillers for text representations of speech transcripts},
+  author={Dinkar, Tanvi and Colombo, Pierre and Labeau, Matthieu and Clavel, Chlo{\'e}},
+  journal={arXiv preprint arXiv:2009.11340},
   year={2020}
 }
 ```
