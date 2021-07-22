@@ -64,18 +64,18 @@ optional arguments:
  The following commands allow the 4 experiments of the paper to be reproduced.
  ```bash
 # Perplexity experiment (Left-to-right Language Model)
-python main.py --filler_case none --do_train --do_perplexity
+python trainer.py --gpus 1 --num_train_epochs 10 --experiment LM --dataset_name no_fillers
 
 # Fine-tuned Perplexity experiment (Masked Language Model)
-python main.py --filler_case none --do_train --do_perplexity --use_mlm
+python trainer.py --gpus 1 --num_train_epochs 10 --experiment MLM --dataset_name no_fillers
 
 # Confidence Prediction experiment
-python main.py --filler_case none --do_train --do_predict_confidence
+python trainer.py --num_train_epochs 10 --experiment ConfPred --dataset_name no_fillers
 
 # Fine-tuned Confidence Predition experiment
-python main.py --filler_case none --do_train --do_predict_confidence --use_mlm
+python trainer.py --num_train_epochs 10 --experiment ConfPredFT --dataset_name no_fillers
 ```
-The default filler_case is `none`, the case of a single filler is `unique`, and the case of distinct fillers for "um" and "uh" is `distinct`.
+The default filler_case is `no_filler`, the case of a single filler is `unique_filler`, and the case of distinct fillers for "um" and "uh" is `distinct_fillers`.
 
 In order to make use of the masked language model for running the fine-tuned confidence prediction experiment, the fine-tuned perplexity must be run immediately prior so that the masked language model can be available to load prior to training. The masked language model is temporarily saved in the folder `best_tfmr`. If you want to save this model for future use move it to another location. In order to use it again as part of the fine-tuned confidence prediction experiment add the option `--mlm_path` as well the folder path to where the contents of `best_tfmr` are now located.
 
@@ -94,23 +94,15 @@ The output directory that is produced by this program has the following structur
 |&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- checkpoint-perplexity_ft.ckpt <br>
 |&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- checkpoint-prediction.ckpt <br>
 |&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- checkpoint-prediction_ft.ckpt <br>
-+-- runs <br>
-|&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- perplexity <br>
+|&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- 'experiment'_'dataset_name' <br>
 |&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- version_*n* <br>
-|&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- perplexity_ft <br>
-|&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- version_*n* <br>
-|&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- prediction <br>
-|&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- version_*n* <br>
-|&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- prediction_ft <br>
-|&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- version_*n* <br>
-+-- results <br>
-|&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- test_results.txt
+
 
 ## Run Tensorboard
-The metrics which are logged as part of the training loop (perplexity, loss, val_loss) can be viewed using Tensorboard.
+The metrics which are logged as part of the training loop (loss, perplexity, MSE) can be viewed using Tensorboard.
 ```bash
 $ cd SLU-fillers/output
-$ tensorboard --logdir runs/perplexity_ft
+$ tensorboard --logdir lightning_logs
 ```
 
 <!--
