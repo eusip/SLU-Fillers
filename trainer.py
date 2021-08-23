@@ -15,21 +15,21 @@ from lightning_base import (
     add_generic_args, 
     add_trainer_args, 
     generic_train,
-    )
-from models import (
-    BertLM, 
-    BertMLM, 
-    BertSentPrediction, 
-    BertSentPredictionFT,
 )
-from data import NoFillers, UniqueFiller, DistinctFillers
 
-os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+from models import (
+    MaskedLM, 
+    ConfPrediction, 
+    ConfPredictionFT,
+)
 
-torch.cuda.empty_cache()
-torch.cuda.memory_summary(device=None, abbreviated=False)
+from data import (
+    NoFillers, 
+    UniqueFiller, 
+    DistinctFillers,
+)
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('trainer')
 
 DATASETS = {
     "no_fillers": NoFillers,
@@ -38,10 +38,9 @@ DATASETS = {
 }
 
 MODELS = {
-    "LM": BertLM,
-    "MLM": BertMLM,
-    "SentPred": BertSentPrediction,
-    "SentPredFT": BertSentPredictionFT,
+    "MLM": MaskedLM,
+    "ConfPred": ConfPrediction,
+    "ConfPredFT": ConfPredictionFT,
 }
 
 def main():
@@ -62,6 +61,12 @@ def main():
     # parse args
     args = parser.parse_args()
 
+    # configure CUDA settings
+    if args.gpus:
+        os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+        torch.cuda.empty_cache()
+        torch.cuda.memory_summary(device=None, abbreviated=False)
+
     # instantiate model for experiment
     model = MODELS[args.experiment](args)
 
@@ -71,15 +76,16 @@ def main():
     # instantiate Tensorboard
     tb_logs = os.path.join(os.getcwd(), "lightning_logs")
     rdir = Path(tb_logs)
-    # rdir.mkdirs(parents=True, exist_ok=True)
+    rdir.mkdir(parents=True, exist_ok=True)
     log_name = model.hparams.experiment + "_" + model.hparams.dataset_name
     tb_logger = TensorBoardLogger(save_dir=rdir, name=log_name)
 
     # instantiate trainer
-    trainer = generic_train(model, args, logger=tb_logger)  # logger=True
-    trainer.fit(model, data)
-    if args.do_predict:
-        trainer.test(model, data)
+    trainer = generic_train(model, args, logger=tb_logger)
+    if args.do_train:
+        trainer.fit(model, data)
+    if args.do_validate:
+        trainer.validate(model, data, ckpt_path=None, verbose=True)
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ from transformers import (
     # CONFIG_MAPPING, 
     # MODEL_FOR_MASKED_LM_MAPPING,
 )
+
 from transformers.optimization import (
     Adafactor,
 #     get_cosine_schedule_with_warmup,
@@ -35,24 +36,11 @@ from transformers.optimization import (
 #     get_polynomial_decay_schedule_with_warmup,
 )
 
-# from transformers.utils.versions import require_version_examples
+from transformers.utils.versions import require_version_examples
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('trainer.lightening_base')
 
-# require_version_examples("pytorch_lightning>=1.0.4")
-
-# MODEL_MODES = {
-#     "base": AutoModel,
-#     "sequence-classification": AutoModelForSequenceClassification,
-#     "question-answering": AutoModelForQuestionAnswering,
-#     "pretraining": AutoModelForPreTraining,
-#     "token-classification": AutoModelForTokenClassification,
-#     "language-modeling": AutoModelWithLMHead,
-#     "summarization": AutoModelForSeq2SeqLM,
-#     "translation": AutoModelForSeq2SeqLM,
-#     "mlm": AutoModelForMaskedLM,
-# }
-
+require_version_examples("pytorch_lightning>=1.4.2")
 
 # # update this and the import above to support new schedulers from transformers.optimization
 # arg_to_scheduler = {
@@ -72,7 +60,6 @@ class BaseTransformer(pl.LightningModule):
         self,
         hparams: argparse.Namespace,
         num_labels=None,
-        mode="base",
         config=None,
         tokenizer=None,
         model=None,
@@ -82,21 +69,13 @@ class BaseTransformer(pl.LightningModule):
         super().__init__()
         # TODO: move to self.save_hyperparameters()
         # self.save_hyperparameters()
-        # can also expand arguments into trainer signature for easier reading
 
         self.save_hyperparameters(hparams)
         self.step_count = 0
         self.output_dir = Path(self.hparams.output_dir)
         cache_dir = self.hparams.cache_dir if self.hparams.cache_dir else None
-        if config is None:
-            self.config = AutoConfig.from_pretrained(
-                self.hparams.config_name if self.hparams.config_name else self.hparams.model_name_or_path,
-                **({"num_labels": num_labels} if num_labels is not None else {}),
-                cache_dir=cache_dir,
-                **config_kwargs,
-            )
-        else:
-            self.config: PretrainedConfig = config
+        
+        self.model = model
 
         extra_model_params = ("encoder_layerdrop", "decoder_layerdrop", "dropout", "attention_dropout")
         for p in extra_model_params:
@@ -109,6 +88,7 @@ class BaseTransformer(pl.LightningModule):
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.hparams.tokenizer_name if self.hparams.tokenizer_name else self.hparams.model_name_or_path,
                 cache_dir=cache_dir,
+                is_fast=False,
             )
 
         # accomodate various filler cases
@@ -116,28 +96,6 @@ class BaseTransformer(pl.LightningModule):
             self.tokenizer.add_tokens(['(umm)', '(uhh)'])
         if hparams.dataset_name == "unique_filler":
             self.tokenizer.add_tokens(['[FILLER_WORD]'])
-
-        # else:
-        #     self.tokenizer: PreTrainedTokenizer = tokenizer
-        # self.model_type = MODEL_MODES[mode]
-        if model is None:
-            self.model = self.model_type.from_pretrained(
-                self.hparams.model_name_or_path,
-                from_tf=bool(".ckpt" in self.hparams.model_name_or_path),
-                config=self.config,
-                cache_dir=cache_dir,
-            )
-        else:
-            self.model = model
-
-        # env_cp = os.environ.copy()
-        # self.node_rank, self.local_rank, self.world_size = env_cp['NODE_RANK'], env_cp['LOCAL_RANK'], env_cp['WORLD_SIZE']
-
-        # self.is_in_ddp_subprocess = env_cp['PL_IN_DDP_SUBPROCESS']
-        # self.pl_trainer_gpus = enc_cp['PL_TRAINER_GPUS']
-
-    def load_hf_checkpoint(self, *args, **kwargs):
-        self.model = self.model_type.from_pretrained(*args, **kwargs)
 
     # NOTE: PyTorch Lightning cannot pickle scheduler.lr_lambda object. Scheduler has been disabled until bug report.
     # def get_lr_scheduler(self):
@@ -188,17 +146,6 @@ class BaseTransformer(pl.LightningModule):
     #     num_devices = max(1, self.hparams.gpus)  # TODO: consider num_tpu_cores
     #     effective_batch_size = self.hparams.train_batch_size * self.hparams.accumulate_grad_batches * num_devices
     #     return (self.dataset_size / effective_batch_size) * self.hparams.max_epochs
-
-    # NOTE: not needed when using Hf Datasets library
-    # def _feature_file(self, mode):
-    #     return os.path.join(
-    #         self.hparams.data_dir,
-    #         "cached_{}_{}_{}".format(
-    #             mode,
-    #             list(filter(None, self.hparams.model_name_or_path.split("/"))).pop(),
-    #             str(self.hparams.max_seq_length),
-    #         ),
-    #     )
 
     @pl.utilities.rank_zero_only
     def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
@@ -303,31 +250,25 @@ class BaseTransformer(pl.LightningModule):
             dest="max_epochs",
             default=3,
             type=int,
-            # help = ,
+            help="The number of training epochs.",
         )
         parser.add_argument(
             "--train_batch_size",
             default=8,
             type=int,
-            # help = ,
+            help="The batch size for the training loop.",
         )
         parser.add_argument(
             "--eval_batch_size",
             default=8,
             type=int,
-            # help = ,
+            help="The batch size for the validation loop.",
         )
         parser.add_argument(
             "--adafactor",
             action="store_true",
-            # help = ,
+            help="Use of the AdaFactor learning rate scheduler.",
         )
-        # parser.add_argument(
-        #     "--filler_case",
-        #     default="unique",
-        #     type=str,
-        #     help="Set the filler case for this analysis - 'distinct', 'unique', 'none'.",
-        # )
 
 
 # class LoggingCallback(pl.Callback):
@@ -361,7 +302,7 @@ def add_generic_args(parser, root_dir) -> None:
         "--output_dir",
         default="output",
         type=str,
-        # required=True,
+        required=False,
         help="The output directory where the model predictions and checkpoints will be written.",
     )
     parser.add_argument(
@@ -370,6 +311,13 @@ def add_generic_args(parser, root_dir) -> None:
         type=str,
         required=False,
         help="The input data dir. Should contain the modeling data.",
+    )
+    parser.add_argument(
+        "--log_dir",
+        default="tb_logs",
+        type=str,
+        required=False,
+        help="The Tensorboard log dir.",
     )
     parser.add_argument(
         "--dataset_name",
@@ -385,15 +333,17 @@ def add_generic_args(parser, root_dir) -> None:
         type=float,
         help="Max gradient norm.",
     )
-    # parser.add_argument(
-    #     "--do_train",
-    #     action="store_true",
-    #     help="Whether to run training.",
-    # )
     parser.add_argument(
-        "--do_predict",
-        action="store_true",
-        help="Whether to run predictions on the test set.",
+        "--do_train",
+        default=True,
+        type=bool,
+        help="Whether to run training.",
+    )
+    parser.add_argument(
+        "--do_validate",
+        default=False,
+        type=bool,
+        help="Whether to run one evaluation epoch over the validation set.",
     )
     parser.add_argument(
         "--gradient_accumulation_steps",
@@ -419,7 +369,7 @@ def add_generic_args(parser, root_dir) -> None:
         default=None,
         type=str,
         required=True,
-        help="Set the model for this analysis - 'LM', 'MLM', 'SentPred', 'SentPredFT'.",
+        help="Set the model for this analysis - 'LM', 'MLM', 'ConfPred', 'ConfPredFT'.",
     )
 
 def add_trainer_args(parser, root_dir) -> None:
@@ -464,9 +414,6 @@ def generic_train(
     # init project folders
     cdir = Path(args.cache_dir)
     cdir.mkdir(parents=True, exist_ok=True)
-    # NOTE: only needed if _feature_file() is implemented
-    # ddir = Path(args.data_dir)
-    # ddir.mkdir(parents=True, exist_ok=True)
     odir = Path(args.output_dir)
     odir.mkdir(parents=True, exist_ok=True)
 
@@ -485,7 +432,6 @@ def generic_train(
     if args.gpus > 1:
         train_params["accelerator"] = "ddp"
     elif args.gpus > 0:
-        train_params["benchmark"] = True
         train_params["precision"] = 16
     else:
         train_params["accelerator"] = extra_train_kwargs.get("accelerator", None)

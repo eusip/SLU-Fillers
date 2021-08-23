@@ -9,7 +9,6 @@ from argparse import Namespace
 import pandas as pd
 
 from torch.utils.data.dataloader import DataLoader
-from torch.utils.data.sampler import RandomSampler, SequentialSampler
 
 from pytorch_lightning import LightningDataModule
 
@@ -17,49 +16,48 @@ from transformers import (
     BertTokenizer, 
     BertTokenizerFast, 
     DataCollator,
+    DataCollatorWithPadding,
     DataCollatorForLanguageModeling,
-    DataCollatorForTokenClassification,
 )
-from transformers.data import data_collator
+
 from datasets import load_dataset
 
+logger = logging.getLogger('trainer.data')
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-logger = logging.getLogger(__name__)
-
-hparams = {
-    "cache_dir": '.cache',
-    "config_name": 'bert-base-cased',
-    "data_dir": 'data',
-    "eval_batch_size": 8,
-    "train_batch_size": 8,
-    "model_name_or_path": 'bert-base-cased',
-    "preprocessing_num_workers": 4,
-    "num_workers": 4,
-    "output_dir": 'output',
-    "subset_name": 'swda',
-    "tokenizer_name": 'bert-base-cased',
-    "line_by_line": True,
-    "pad_to_max_length": True,
-    "overwrite_cache": True,
-    "max_seq_length": 512,
-    "mlm_probability": 0.15,
-    "task": 'sts-b',
-    "filler_case": 'unique',
-    "num_train_epochs": '10',
-    "do_train": False,
-    "do_perplexity": False,
-    "do_predict_confidence": False,
-    "mlm": False,
-    "fast_dev_run": False,
-    "experiment": 'SentPred',
-}
+hparams = Namespace(
+    cache_dir='.cache',
+    config_name='bert-base-cased',
+    data_dir='data',
+    eval_batch_size=8,
+    train_batch_size=8,
+    model_name_or_path='bert-base-cased',
+    preprocessing_num_workers=4,
+    num_workers=4,
+    output_dir='output',
+    subset_name='swda',
+    tokenizer_name='bert-base-cased',
+    line_by_line=True,
+    pad_to_max_length=True,
+    overwrite_cache=True,
+    max_seq_length=512,
+    mlm_probability=0.15,
+    task='sts-b',
+    filler_case='unique',
+    num_train_epochs='10',
+    do_train=False,
+    do_perplexity=False,
+    do_predict_confidence=False,
+    mlm=False,
+    fast_dev_run=False,
+    experiment='ConfPred',
+)
 
 class NoFillers(LightningDataModule):
     def __init__(self, hparams):
         """Initialize Dataloader parameters."""
-        self.hparams = Namespace(**hparams)
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        # self.hparams = Namespace(**hparams)
+        self.hparams.update(hparams)
 
         super().__init__()
 
@@ -174,15 +172,16 @@ class NoFillers(LightningDataModule):
                 load_from_cache_file=not self.hparams.overwrite_cache,
             )
 
-        if self.hparams.experiment in ("LM", "MLM"):
+        if self.hparams.experiment == "MLM":
             data_collator = DataCollatorForLanguageModeling(
                 tokenizer=tokenizer,
                 mlm=self.hparams.mlm, 
                 mlm_probability=self.hparams.mlm_probability,
             )
         else:
-            data_collator = DataCollatorForTokenClassification(
+            data_collator = DataCollatorWithPadding(
                 tokenizer=tokenizer,
+                padding="longest",
                 max_length=self.hparams.max_seq_length, 
             )
             
@@ -191,29 +190,19 @@ class NoFillers(LightningDataModule):
         self.test = tokenize["test"]
         self.data_collator = data_collator
 
-    # def _get_train_sampler(self):
-    #     return RandomSampler(self.train)
-
     def train_dataloader(self):
-        # train_sampler = self._get_train_sampler()
-
         return DataLoader(self.train,
                           batch_size = self.hparams.train_batch_size,
-                        #   sampler = train_sampler,
+                          shuffle=True,
                           collate_fn=self.data_collator,
                           num_workers = self.hparams.num_workers,
                           drop_last= True,
         )
 
-    # def _get_val_sampler(self):
-    #     return SequentialSampler(self.val)
-
     def val_dataloader(self):
-        # val_sampler = self._get_val_sampler()
-
         return DataLoader(self.val,
                           batch_size = self.hparams.eval_batch_size,
-                        #   sampler = val_sampler,
+                          shuffle=False,
                           collate_fn=self.data_collator,
                           num_workers = self.hparams.num_workers,
                           drop_last= True,
@@ -222,6 +211,7 @@ class NoFillers(LightningDataModule):
     def test_dataloader(self):
         return DataLoader(self.test,
                           batch_size = self.hparams.eval_batch_size,
+                          shuffle=False,
                           collate_fn=self.data_collator,
                           num_workers = self.hparams.num_workers,
                           drop_last= True,
@@ -231,7 +221,8 @@ class NoFillers(LightningDataModule):
 class UniqueFiller(LightningDataModule):
     def __init__(self, hparams):
         """Initialize Dataloader parameters."""
-        self.hparams = Namespace(**hparams)
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        self.hparams.update(hparams)
 
         super().__init__()
 
@@ -346,15 +337,16 @@ class UniqueFiller(LightningDataModule):
                 load_from_cache_file=not self.hparams.overwrite_cache,
             )
 
-        if self.hparams.experiment in ("LM", "MLM"):
+        if self.hparams.experiment == "MLM":
             data_collator = DataCollatorForLanguageModeling(
                 tokenizer=tokenizer,
                 mlm=self.hparams.mlm, 
                 mlm_probability=self.hparams.mlm_probability,
             )
         else:
-            data_collator = DataCollatorForTokenClassification(
+            data_collator = DataCollatorWithPadding(
                 tokenizer=tokenizer,
+                padding="longest",
                 max_length=self.hparams.max_seq_length, 
             )
 
@@ -363,29 +355,19 @@ class UniqueFiller(LightningDataModule):
         self.test = tokenize["test"]
         self.data_collator = data_collator
 
-    # def _get_train_sampler(self):
-    #     return RandomSampler(self.train)
-
     def train_dataloader(self):
-        # train_sampler = self._get_train_sampler()
-
         return DataLoader(self.train,
                           batch_size = self.hparams.train_batch_size,
-                        #   sampler = train_sampler,
+                          shuffle=True,
                           collate_fn=self.data_collator,
                           num_workers = self.hparams.num_workers,
                           drop_last= True,
         )
 
-    # def _get_val_sampler(self):
-    #     return SequentialSampler(self.val)
-
     def val_dataloader(self):
-        # val_sampler = self._get_val_sampler()
-
         return DataLoader(self.val,
                           batch_size = self.hparams.eval_batch_size,
-                        #   sampler = val_sampler,
+                          shuffle=False,
                           collate_fn=self.data_collator,
                           num_workers = self.hparams.num_workers,
                           drop_last= True,
@@ -394,6 +376,7 @@ class UniqueFiller(LightningDataModule):
     def test_dataloader(self):
         return DataLoader(self.test,
                           batch_size = self.hparams.eval_batch_size,
+                          shuffle=False,
                           collate_fn=self.data_collator,
                           num_workers = self.hparams.num_workers,
                           drop_last= True,
@@ -403,7 +386,8 @@ class UniqueFiller(LightningDataModule):
 class DistinctFillers(LightningDataModule):
     def __init__(self, hparams):
         """Initialize Dataloader parameters."""
-        self.hparams = Namespace(**hparams)
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        self.hparams.update(hparams)
 
         super().__init__()
 
@@ -518,15 +502,16 @@ class DistinctFillers(LightningDataModule):
                 load_from_cache_file=not self.hparams.overwrite_cache,
             )
 
-        if self.hparams.experiment in ("LM", "MLM"):
+        if self.hparams.experiment == "MLM":
             data_collator = DataCollatorForLanguageModeling(
                 tokenizer=tokenizer,
                 mlm=self.hparams.mlm, 
                 mlm_probability=self.hparams.mlm_probability,
             )
         else:
-            data_collator = DataCollatorForTokenClassification(
+            data_collator = DataCollatorWithPadding(
                 tokenizer=tokenizer,
+                padding="longest",
                 max_length=self.hparams.max_seq_length, 
             )
 
@@ -535,29 +520,19 @@ class DistinctFillers(LightningDataModule):
         self.test = tokenize["test"]
         self.data_collator = data_collator
 
-    # def _get_train_sampler(self):
-    #     return RandomSampler(self.train)
-
     def train_dataloader(self):
-        # train_sampler = self._get_train_sampler()
-
         return DataLoader(self.train,
                           batch_size = self.hparams.train_batch_size,
-                        #   sampler = train_sampler,
+                          shuffle=True,
                           collate_fn=self.data_collator,
                           num_workers = self.hparams.num_workers,
                           drop_last= True,
         )
 
-    # def _get_val_sampler(self):
-    #     return SequentialSampler(self.val)
-
     def val_dataloader(self):
-        # val_sampler = self._get_val_sampler()
-
         return DataLoader(self.val,
                           batch_size = self.hparams.eval_batch_size,
-                        #   sampler = val_sampler,
+                          shuffle=False,
                           collate_fn=self.data_collator,
                           num_workers = self.hparams.num_workers,
                           drop_last= True,
@@ -566,6 +541,7 @@ class DistinctFillers(LightningDataModule):
     def test_dataloader(self):
         return DataLoader(self.test,
                           batch_size = self.hparams.eval_batch_size,
+                          shuffle=False,
                           collate_fn=self.data_collator,
                           num_workers = self.hparams.num_workers,
                           drop_last= True,
