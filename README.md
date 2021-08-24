@@ -50,30 +50,31 @@ usage: trainer.py [--output_dir OUTPUT_DIR] [--data_dir DATA_DIR]
 optional arguments:
   -h, --help            show this help message and exit
   --output_dir OUTPUT_DIR
-                        The input data dir. Should contain the training files based on the POM (2014) dataset.
-  --data_dir DATA_DIR   The output directory where the model predictions and checkpoints will be written.
-  --log_dir LOG_DIR     Overwrite the cached training and evaluation sets.
+                        The output directory where the model predictions and checkpoints will be written.
+  --log_dir LOG_DIR     The Tensorboard log directory.
   --dataset_name DATASET_NAME
-                        The number of GPUs allocated for this, it is by default 0 meaning none.
+                        The name of the dataset to use.
   --max_grad_norm GRADIENT_CLIP_VAL
-                        Value used to clip the global gradient norm for the optimizer.
+                        Max gradient norm.                    
+  --do_train DO_TRAIN   Whether to run full training.
+                        Whether to run one evaluation epoch over the validation set.
   --do_validate DO_VALIDATE
-                        Number of updates steps to accumulate before performing a backward/update pass.
+                        Whether to run one evaluation epoch over the validation set.
   --gradient_accumulation_steps ACCUMULATE_GRAD_BATCHES
-                        Random seed for initialization.
+                        Number of updates steps to accumulate before performing a backward/update pass.
   --check_val_every_n_epoch CHECK_VAL_EVERY_N_EPOCH
                         Evaluate the model every n training epochs.
-  --seed SEED           Run the training.
-  --overwrite_cache     Run the testing.
+  --seed SEED           Random seed for initialization.
+  --overwrite_cache     Overwrite the cached training and evaluation sets.
   --experiment EXPERIMENT
-                        Whether to compute perplexity.
+                        Set the model for this analysis - 'LM', 'MLM', 'ConfPred', 'ConfPredFT'.
   --gpus GPUS
-                        Whether to compute a confidence prediction.
+                        The number of GPUs allocated for this, it is by default 0 meaning none.
   --precision PRECISION
-                        Modelling using MLM model during training. Inference using the MLM model during testing.
+                        Whether to use full precision or native amp 16-bit half precision.
   --check_val_every_n_epoch CHECK_VAL_EVERY_N_EPOCH
-                        n        Runs 1 batch of train, test and val to find any bugs.
-  --fast_dev_run
+                        Evaluate the model every n training epochs.
+  --fast_dev_run        Runs 1 batch of train, test and val to find any bugs.
  ```
  The following commands allow the 4 experiments of the paper to be reproduced.
  ```bash
