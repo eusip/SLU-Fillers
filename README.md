@@ -37,51 +37,66 @@ An overview of the primary arguments can be accessed using the `--help` option.
  ```
 $ python main.py --help
 
-usage: main.py [-h] [--data_dir DATA_DIR] [--output_dir OUTPUT_DIR] [--overwrite_cache] [--gpus GPUS] [--max_grad_norm GRADIENT_CLIP_VAL] [--gradient_accumulation_steps ACCUMULATE_GRAD_BATCHES] [--seed SEED] [--check_val_every_n_epoch CHECK_VAL_EVERY_N_EPOCH] [--do_train] [--do_test] [--do_perplexity] [--do_predict_confidence] [--use_mlm] [--fast_dev_run]
+usage: trainer.py [--output_dir OUTPUT_DIR] [--data_dir DATA_DIR]
+                  [--log_dir LOG_DIR] --dataset_name DATASET_NAME
+                  [--max_grad_norm GRADIENT_CLIP_VAL] [--do_train DO_TRAIN]
+                  [--do_validate DO_VALIDATE]
+                  [--gradient_accumulation_steps ACCUMULATE_GRAD_BATCHES]
+                  [--seed SEED] [--overwrite_cache] --experiment EXPERIMENT
+                  [--gpus GPUS] [--precision PRECISION]
+                  [--check_val_every_n_epoch CHECK_VAL_EVERY_N_EPOCH]
+                  [--fast_dev_run]
 
 optional arguments:
   -h, --help            show this help message and exit
-  --data_dir DATA_DIR   The input data dir. Should contain the training files based on the POM (2014) dataset.
   --output_dir OUTPUT_DIR
-                        The output directory where the model predictions and checkpoints will be written.
-  --overwrite_cache     Overwrite the cached training and evaluation sets.
-  --gpus GPUS           The number of GPUs allocated for this, it is by default 0 meaning none.
+                        The input data dir. Should contain the training files based on the POM (2014) dataset.
+  --data_dir DATA_DIR   The output directory where the model predictions and checkpoints will be written.
+  --log_dir LOG_DIR     Overwrite the cached training and evaluation sets.
+  --dataset_name DATASET_NAME
+                        The number of GPUs allocated for this, it is by default 0 meaning none.
   --max_grad_norm GRADIENT_CLIP_VAL
                         Value used to clip the global gradient norm for the optimizer.
-  --gradient_accumulation_steps ACCUMULATE_GRAD_BATCHES
+  --do_validate DO_VALIDATE
                         Number of updates steps to accumulate before performing a backward/update pass.
-  --seed SEED           Random seed for initialization.
+  --gradient_accumulation_steps ACCUMULATE_GRAD_BATCHES
+                        Random seed for initialization.
   --check_val_every_n_epoch CHECK_VAL_EVERY_N_EPOCH
                         Evaluate the model every n training epochs.
-  --do_train            Run the training.
-  --do_test             Run the testing.
-  --do_perplexity       Whether to compute perplexity.
-  --do_predict_confidence
+  --seed SEED           Run the training.
+  --overwrite_cache     Run the testing.
+  --experiment EXPERIMENT
+                        Whether to compute perplexity.
+  --gpus GPUS
                         Whether to compute a confidence prediction.
-  --use_mlm             Modelling using MLM model during training. Inference using the MLM model during testing.
-  --fast_dev_run        Runs 1 batch of train, test and val to find any bugs.
+  --precision PRECISION
+                        Modelling using MLM model during training. Inference using the MLM model during testing.
+  --check_val_every_n_epoch CHECK_VAL_EVERY_N_EPOCH
+                        n        Runs 1 batch of train, test and val to find any bugs.
+  --fast_dev_run
  ```
  The following commands allow the 4 experiments of the paper to be reproduced.
  ```bash
-# Perplexity experiment (Left-to-right Language Model)
-python trainer.py --gpus 1 --num_train_epochs 10 --experiment LM --dataset_name no_fillers
+# Perplexity experiment
+python trainer.py --gpus 1 --experiment MLM --dataset_name no_fillers --do_train False --do_validate True
 
 # Fine-tuned Perplexity experiment (Masked Language Model)
 python trainer.py --gpus 1 --num_train_epochs 10 --experiment MLM --dataset_name no_fillers
 
 # Confidence Prediction experiment
-python trainer.py --num_train_epochs 10 --experiment ConfPred --dataset_name no_fillers
+python trainer.py --gpus 1 --num_train_epochs 10 --experiment ConfPred --dataset_name no_fillers
 
 # Fine-tuned Confidence Predition experiment
-python trainer.py --num_train_epochs 10 --experiment ConfPredFT --dataset_name no_fillers
+python trainer.py --gpus 1 --num_train_epochs 10 --experiment ConfPredFT --dataset_name no_fillers
 ```
-The default filler_case is `no_filler`, the case of a single filler is `unique_filler`, and the case of distinct fillers for "um" and "uh" is `distinct_fillers`.
+The --dataset_name for the case of no filler is `no_filler`, the case of a single filler is `unique_filler`, and the case of distinct fillers for "um" and "uh" is `distinct_fillers`.
 
 In order to make use of the masked language model for running the fine-tuned confidence prediction experiment, the fine-tuned perplexity must be run immediately prior so that the masked language model can be available to load prior to training. The masked language model is temporarily saved in the folder `best_tfmr`. If you want to save this model for future use move it to another location. In order to use it again as part of the fine-tuned confidence prediction experiment add the option `--mlm_path` as well the folder path to where the contents of `best_tfmr` are now located.
 
 ## View the output
-The output directory that is produced by this program has the following structure:
+The output directory that is produced by this program contains folders named by experiment and dataset name. They contain the text files with the final perplexity and loss values during training and validation.
 
+<!--
 . <br>
 +-- best_tfmr <br>
 |&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+--config.json <br>
@@ -96,7 +111,7 @@ The output directory that is produced by this program has the following structur
 |&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- checkpoint-prediction_ft.ckpt <br>
 |&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- 'experiment'_'dataset_name' <br>
 |&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+-- version_*n* <br>
-
+-->
 
 ## Run Tensorboard
 The metrics which are logged as part of the training loop (loss, perplexity, MSE) can be viewed using Tensorboard.
