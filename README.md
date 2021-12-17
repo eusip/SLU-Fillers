@@ -148,6 +148,8 @@ trainer.test(test_dataloaders=test)
 ```
 -->
 
+### Contact
+Please contact tanvi dot dinkar at telecom-paris.fr for queries.
 
 ### Citation
 ```
